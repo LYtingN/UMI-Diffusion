@@ -1,3 +1,42 @@
-
 # local, untracked job configs holding real secrets (e.g. GH_PAT) — never commit
 *.local.yaml
+
+# Python caches / compiled
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Training outputs / checkpoints / artifacts
+data/outputs/
+outputs/
+checkpoints/
+*.ckpt
+*.pth
+*.pt
+*.pkl
+*.safetensors
+logs/
+*.log
+logs.json.txt
+
+# Experiment trackers
+wandb/
+mlruns/
+.hydra/
+
+# HuggingFace / model caches
+hf_cache/
+.cache/
+
+# Jupyter / editor / OS
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
+*.swp
