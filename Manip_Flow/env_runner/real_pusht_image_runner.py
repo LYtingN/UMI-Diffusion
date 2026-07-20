@@ -1,5 +1,5 @@
-from pipeline.Manip_Flow.policy.base_image_policy import BaseImagePolicy
-from pipeline.Manip_Flow.env_runner.base_image_runner import BaseImageRunner
+from Manip_Flow.policy.base_image_policy import BaseImagePolicy
+from Manip_Flow.env_runner.base_image_runner import BaseImageRunner
 
 class RealPushTImageRunner(BaseImageRunner):
     def __init__(self,

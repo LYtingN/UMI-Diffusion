@@ -1,8 +1,8 @@
 from typing import Dict
 import torch
 import torch.nn as nn
-from pipeline.Manip_Flow.model.common.module_attr_mixin import ModuleAttrMixin
-from pipeline.Manip_Flow.model.common.normalizer import LinearNormalizer
+from Manip_Flow.model.common.module_attr_mixin import ModuleAttrMixin
+from Manip_Flow.model.common.normalizer import LinearNormalizer
 
 class BaseImagePolicy(ModuleAttrMixin):
     # init accepts keyword argument shape_meta, see config/task/*_image.yaml

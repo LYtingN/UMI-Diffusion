@@ -5,12 +5,12 @@ import torch.nn.functional as F
 from einops import rearrange, reduce
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
-from pipeline.Manip_Flow.model.common.normalizer import LinearNormalizer
-from pipeline.Manip_Flow.policy.base_image_policy import BaseImagePolicy
-from pipeline.Manip_Flow.model.diffusion.conditional_unet1d import ConditionalUnet1D
-from pipeline.Manip_Flow.model.diffusion.mask_generator import LowdimMaskGenerator
-from pipeline.Manip_Flow.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
-from pipeline.Manip_Flow.common.pytorch_util import dict_apply
+from Manip_Flow.model.common.normalizer import LinearNormalizer
+from Manip_Flow.policy.base_image_policy import BaseImagePolicy
+from Manip_Flow.model.diffusion.conditional_unet1d import ConditionalUnet1D
+from Manip_Flow.model.diffusion.mask_generator import LowdimMaskGenerator
+from Manip_Flow.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
+from Manip_Flow.common.pytorch_util import dict_apply
 
 class DiffusionUnetImagePolicy(BaseImagePolicy):
     def __init__(self, 

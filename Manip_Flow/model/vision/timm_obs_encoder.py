@@ -8,9 +8,9 @@ import torch.nn.functional as F
 import torchvision
 import logging
 
-from pipeline.Manip_Flow.model.common.module_attr_mixin import ModuleAttrMixin
+from Manip_Flow.model.common.module_attr_mixin import ModuleAttrMixin
 
-from pipeline.Manip_Flow.common.pytorch_util import replace_submodules
+from Manip_Flow.common.pytorch_util import replace_submodules
 
 logger = logging.getLogger(__name__)
 

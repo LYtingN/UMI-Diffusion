@@ -3,9 +3,9 @@ import copy
 import torch
 import torch.nn as nn
 import torchvision
-from pipeline.Manip_Flow.model.vision.crop_randomizer import CropRandomizer
-from pipeline.Manip_Flow.model.common.module_attr_mixin import ModuleAttrMixin
-from pipeline.Manip_Flow.common.pytorch_util import dict_apply, replace_submodules
+from Manip_Flow.model.vision.crop_randomizer import CropRandomizer
+from Manip_Flow.model.common.module_attr_mixin import ModuleAttrMixin
+from Manip_Flow.common.pytorch_util import dict_apply, replace_submodules
 
 
 class MultiImageObsEncoder(ModuleAttrMixin):

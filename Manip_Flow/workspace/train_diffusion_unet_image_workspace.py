@@ -20,15 +20,15 @@ import pickle
 import tqdm
 import numpy as np
 import shutil
-from pipeline.Manip_Flow.workspace.base_workspace import BaseWorkspace
-from pipeline.Manip_Flow.policy.diffusion_unet_image_policy import DiffusionUnetImagePolicy
-from pipeline.Manip_Flow.dataset.base_dataset import BaseImageDataset, BaseDataset
-from pipeline.Manip_Flow.env_runner.base_image_runner import BaseImageRunner
-from pipeline.Manip_Flow.common.checkpoint_util import TopKCheckpointManager
-from pipeline.Manip_Flow.common.json_logger import JsonLogger
-from pipeline.Manip_Flow.common.pytorch_util import dict_apply, optimizer_to
-from pipeline.Manip_Flow.model.diffusion.ema_model import EMAModel
-from pipeline.Manip_Flow.model.common.lr_scheduler import get_scheduler
+from Manip_Flow.workspace.base_workspace import BaseWorkspace
+from Manip_Flow.policy.diffusion_unet_image_policy import DiffusionUnetImagePolicy
+from Manip_Flow.dataset.base_dataset import BaseImageDataset, BaseDataset
+from Manip_Flow.env_runner.base_image_runner import BaseImageRunner
+from Manip_Flow.common.checkpoint_util import TopKCheckpointManager
+from Manip_Flow.common.json_logger import JsonLogger
+from Manip_Flow.common.pytorch_util import dict_apply, optimizer_to
+from Manip_Flow.model.diffusion.ema_model import EMAModel
+from Manip_Flow.model.common.lr_scheduler import get_scheduler
 from accelerate import Accelerator
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)

@@ -28,19 +28,19 @@ import argparse
 import pathlib
 import sys
 
-_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import numpy as np
 import torch
 
-from pipeline.Manip_Flow.model.common.normalizer import (
+from Manip_Flow.model.common.normalizer import (
     LinearNormalizer,
     SingleFieldLinearNormalizer,
 )
-from pipeline.Manip_Flow.model.vision.timm_obs_encoder import TimmObsEncoder
-from pipeline.Manip_Flow.policy.flow_timm_policy import FlowTimmPolicy
+from Manip_Flow.model.vision.timm_obs_encoder import TimmObsEncoder
+from Manip_Flow.policy.flow_timm_policy import FlowTimmPolicy
 from pipeline.Deploy.bridge.dp_adapter import dp_action_to_keypoints
 
 IMG_H = 2  # img_obs_horizon

@@ -42,12 +42,12 @@ import torch
 import torch.nn.functional as F
 from einops import reduce
 
-from pipeline.Manip_Flow.model.common.normalizer import LinearNormalizer
-from pipeline.Manip_Flow.model.diffusion.conditional_unet1d import ConditionalUnet1D
-from pipeline.Manip_Flow.model.vision.timm_obs_encoder import TimmObsEncoder
-from pipeline.Manip_Flow.policy.base_image_policy import BaseImagePolicy
+from Manip_Flow.model.common.normalizer import LinearNormalizer
+from Manip_Flow.model.diffusion.conditional_unet1d import ConditionalUnet1D
+from Manip_Flow.model.vision.timm_obs_encoder import TimmObsEncoder
+from Manip_Flow.policy.base_image_policy import BaseImagePolicy
 
-from pipeline.Manip_Flow.model.flow_dit_1d import FlowDiT1D
+from Manip_Flow.model.flow_dit_1d import FlowDiT1D
 
 
 class FlowTimmPolicy(BaseImagePolicy):

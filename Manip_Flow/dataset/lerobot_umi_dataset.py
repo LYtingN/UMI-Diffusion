@@ -43,8 +43,8 @@ import numpy as np
 import pandas as pd
 import scipy.spatial.transform as st
 
-from pipeline.Manip_Flow.common.replay_buffer import ReplayBuffer
-from pipeline.Manip_Flow.dataset.umi_dataset import UmiDataset
+from Manip_Flow.common.replay_buffer import ReplayBuffer
+from Manip_Flow.dataset.umi_dataset import UmiDataset
 
 
 # ---- LeRobot field layout (bimanual UMI DAS-gripper) -----------------------
@@ -73,7 +73,7 @@ def _make_image_transform(in_hw, out_res):
     ih, iw = in_hw
     ow, oh = out_res
     try:
-        from pipeline.Manip_Flow.common.cv2_util import get_image_transform
+        from Manip_Flow.common.cv2_util import get_image_transform
 
         tf = get_image_transform(input_res=(iw, ih), output_res=(ow, oh), bgr_to_rgb=False)
         return tf
@@ -212,7 +212,7 @@ class LeRobotUmiDataset(UmiDataset):
         max_duration: Optional[float] = None,
         max_episodes: Optional[int] = None,        # extra: cap episodes for smoke runs
     ):
-        from pipeline.Manip_Flow.common.sampler import SequenceSampler, get_val_mask
+        from Manip_Flow.common.sampler import SequenceSampler, get_val_mask
 
         self.pose_repr = pose_repr
         self.obs_pose_repr = self.pose_repr.get("obs_pose_repr", "rel")

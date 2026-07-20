@@ -1,5 +1,5 @@
-from pipeline.Manip_Flow.model.common.normalizer import SingleFieldLinearNormalizer
-from pipeline.Manip_Flow.common.pytorch_util import dict_apply, dict_apply_reduce, dict_apply_split
+from Manip_Flow.model.common.normalizer import SingleFieldLinearNormalizer
+from Manip_Flow.common.pytorch_util import dict_apply, dict_apply_reduce, dict_apply_split
 import numpy as np
 import torch
 

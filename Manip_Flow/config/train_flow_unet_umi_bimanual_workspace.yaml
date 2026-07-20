@@ -34,7 +34,7 @@ defaults:
   - _self_
 
 name: train_flow_dit_timm
-_target_: pipeline.Manip_Flow.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
+_target_: Manip_Flow.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -50,12 +50,12 @@ task:
 n_action_steps: 8
 
 policy:
-  _target_: pipeline.Manip_Flow.policy.flow_timm_policy.FlowTimmPolicy
+  _target_: Manip_Flow.policy.flow_timm_policy.FlowTimmPolicy
 
   shape_meta: ${shape_meta}
 
   obs_encoder:
-    _target_: pipeline.Manip_Flow.model.vision.timm_obs_encoder.TimmObsEncoder
+    _target_: Manip_Flow.model.vision.timm_obs_encoder.TimmObsEncoder
     shape_meta: ${shape_meta}
 
     # DINOv3 ViT-B/16, finetuned (pretrained weights, NOT frozen).
@@ -122,7 +122,7 @@ policy:
   cond_predict_scale: True
 
 ema:
-  _target_: pipeline.Manip_Flow.model.diffusion.ema_model.EMAModel
+  _target_: Manip_Flow.model.diffusion.ema_model.EMAModel
   update_after_step: 0
   inv_gamma: 1.0
   power: 0.75

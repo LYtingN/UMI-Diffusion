@@ -1,5 +1,5 @@
 from typing import Dict
-from pipeline.Manip_Flow.policy.base_image_policy import BaseImagePolicy
+from Manip_Flow.policy.base_image_policy import BaseImagePolicy
 
 class BaseImageRunner:
     def __init__(self, output_dir):

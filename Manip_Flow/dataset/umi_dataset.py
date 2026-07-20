@@ -12,17 +12,17 @@ from tqdm import trange, tqdm
 from filelock import FileLock
 import shutil
 
-from pipeline.Manip_Flow.codecs.imagecodecs_numcodecs import register_codecs
-from pipeline.Manip_Flow.common.normalize_util import (
+from Manip_Flow.codecs.imagecodecs_numcodecs import register_codecs
+from Manip_Flow.common.normalize_util import (
     array_to_stats, concatenate_normalizer, get_identity_normalizer_from_stat,
     get_image_identity_normalizer, get_range_normalizer_from_stat)
-from pipeline.Manip_Flow.common.pose_repr_util import convert_pose_mat_rep
-from pipeline.Manip_Flow.common.pytorch_util import dict_apply
-from pipeline.Manip_Flow.common.replay_buffer import ReplayBuffer
-from pipeline.Manip_Flow.common.sampler import SequenceSampler, get_val_mask
-from pipeline.Manip_Flow.dataset.base_dataset import BaseDataset
-from pipeline.Manip_Flow.model.common.normalizer import LinearNormalizer
-from pipeline.Manip_Flow.common.pose_util import pose_to_mat, mat_to_pose10d
+from Manip_Flow.common.pose_repr_util import convert_pose_mat_rep
+from Manip_Flow.common.pytorch_util import dict_apply
+from Manip_Flow.common.replay_buffer import ReplayBuffer
+from Manip_Flow.common.sampler import SequenceSampler, get_val_mask
+from Manip_Flow.dataset.base_dataset import BaseDataset
+from Manip_Flow.model.common.normalizer import LinearNormalizer
+from Manip_Flow.common.pose_util import pose_to_mat, mat_to_pose10d
 
 register_codecs()
 

@@ -7,7 +7,7 @@ UmiDataset and the training workspace — is VENDORED into this package
 (``common/``, ``model/``, ``policy/``, ``dataset/``, ``workspace/``,
 ``env_runner/``, ``codecs/``, ``config/task/``), copied from the
 ``universal_manipulation_interface`` repo's ``diffusion_policy``/``umi``
-packages with imports rewritten to ``pipeline.Manip_Flow.*``. Training and
+packages with imports rewritten to ``Manip_Flow.*``. Training and
 inference no longer require that external repo on ``sys.path`` — only the
 Motion_Prior repo root. Data is fed from LeRobot v2.1 dirs via
 ``dataset/lerobot_umi_dataset.py`` (no ``.zarr.zip``).

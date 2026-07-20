@@ -120,10 +120,10 @@ pose_repr: &pose_repr
   action_pose_repr: relative # abs or rel or delta
 
 env_runner:
-  _target_: pipeline.Manip_Flow.env_runner.real_pusht_image_runner.RealPushTImageRunner
+  _target_: Manip_Flow.env_runner.real_pusht_image_runner.RealPushTImageRunner
 
 dataset:
-  _target_: pipeline.Manip_Flow.dataset.umi_dataset.UmiDataset
+  _target_: Manip_Flow.dataset.umi_dataset.UmiDataset
   shape_meta: *shape_meta
   dataset_path: *dataset_path
   cache_dir: null

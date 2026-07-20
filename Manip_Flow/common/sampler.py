@@ -3,7 +3,7 @@ import numpy as np
 import random
 import scipy.interpolate as si
 import scipy.spatial.transform as st
-from pipeline.Manip_Flow.common.replay_buffer import ReplayBuffer
+from Manip_Flow.common.replay_buffer import ReplayBuffer
 
 def get_val_mask(n_episodes, val_ratio, seed=0):
     val_mask = np.zeros(n_episodes, dtype=bool)

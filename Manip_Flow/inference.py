@@ -32,7 +32,7 @@ Last row = most recent frame. Relative conversion (obs_pose_repr) and the
 wrt-other-robot features are computed here via UMI's get_real_umi_obs_dict.
 
 Requires torch; the sys.path bootstrap below puts the repo root on the path so
-the vendored ``pipeline.Manip_Flow...`` modules import (the
+the vendored ``Manip_Flow...`` modules import (the
 ``universal_manipulation_interface`` repo is no longer needed).
 """
 
@@ -42,7 +42,7 @@ import pathlib
 import sys
 from typing import Callable, Dict, Optional
 
-_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -149,8 +149,8 @@ class FlowPolicyInference:
     def predict_relative_action(self, env_obs: Dict[str, np.ndarray]) -> np.ndarray:
         """env_obs (see module docstring) -> RAW relative action (Ta, 20)."""
         import torch
-        from pipeline.Manip_Flow.common.pytorch_util import dict_apply
-        from pipeline.Manip_Flow.common.real_inference_util import get_real_umi_obs_dict
+        from Manip_Flow.common.pytorch_util import dict_apply
+        from Manip_Flow.common.real_inference_util import get_real_umi_obs_dict
 
         obs_dict_np = get_real_umi_obs_dict(
             env_obs=env_obs,

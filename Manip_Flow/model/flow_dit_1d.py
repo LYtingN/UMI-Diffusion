@@ -25,7 +25,7 @@ from typing import Optional, Union
 import torch
 import torch.nn as nn
 
-from pipeline.Manip_Flow.model.diffusion.positional_embedding import SinusoidalPosEmb
+from Manip_Flow.model.diffusion.positional_embedding import SinusoidalPosEmb
 
 
 def _modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:

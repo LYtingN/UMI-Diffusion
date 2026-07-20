@@ -1,15 +1,15 @@
 from typing import Dict, Callable, Tuple, List
 import numpy as np
 import collections
-from pipeline.Manip_Flow.common.cv2_util import get_image_transform
-from pipeline.Manip_Flow.common.pose_repr_util import (
+from Manip_Flow.common.cv2_util import get_image_transform
+from Manip_Flow.common.pose_repr_util import (
     compute_relative_pose, 
     convert_pose_mat_rep
 )
-from pipeline.Manip_Flow.common.pose_util import (
+from Manip_Flow.common.pose_util import (
     pose_to_mat, mat_to_pose, 
     mat_to_pose10d, pose10d_to_mat)
-from pipeline.Manip_Flow.model.common.rotation_transformer import \
+from Manip_Flow.model.common.rotation_transformer import \
     RotationTransformer
 
 def get_real_obs_resolution(

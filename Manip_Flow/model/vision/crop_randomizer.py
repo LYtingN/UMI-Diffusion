@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torchvision.transforms.functional as ttf
-import pipeline.Manip_Flow.model.common.tensor_util as tu
+import Manip_Flow.model.common.tensor_util as tu
 
 class CropRandomizer(nn.Module):
     """

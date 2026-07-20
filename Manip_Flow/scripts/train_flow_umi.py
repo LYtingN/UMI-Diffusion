@@ -4,7 +4,7 @@ Thin launcher around the vendored ``TrainDiffusionUnetImageWorkspace`` (which is
 policy-agnostic: it hydra-instantiates ``cfg.policy`` and only calls
 ``policy(batch)`` / ``policy.predict_action``). It wires up:
 
-  * sys.path: this repo root, so the ``pipeline.Manip_Flow...`` hydra targets
+  * sys.path: this repo root, so the ``Manip_Flow...`` hydra targets
     resolve. The ``universal_manipulation_interface`` repo is NO LONGER needed:
     the ~30 ``diffusion_policy`` modules + ``umi`` helpers this stack uses were
     vendored into ``pipeline/Manip_Flow`` (common/model/policy/workspace/...).
@@ -23,7 +23,7 @@ Same overrides as UMI's train.py apply (dataloader.batch_size=..., etc.).
 import pathlib
 import sys
 
-_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 

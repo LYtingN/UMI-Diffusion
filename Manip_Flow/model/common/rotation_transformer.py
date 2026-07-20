@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.spatial.transform as st
-from pipeline.Manip_Flow.common.pose_util import rot6d_to_mat, mat_to_rot6d
+from Manip_Flow.common.pose_util import rot6d_to_mat, mat_to_rot6d
 
 # converting full name to scipy Rotation name
 scipy_rep_map = {

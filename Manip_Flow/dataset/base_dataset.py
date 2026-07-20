@@ -2,7 +2,7 @@ from typing import Dict
 
 import torch
 import torch.nn
-from pipeline.Manip_Flow.model.common.normalizer import LinearNormalizer
+from Manip_Flow.model.common.normalizer import LinearNormalizer
 
 
 class BaseDataset(torch.utils.data.Dataset):
