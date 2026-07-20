@@ -1,0 +1,178 @@
+# Flow-matching UMI bimanual training, but reading a LeRobot v2.1 dataset
+# directly (no .zarr.zip). Identical to train_flow_unet_umi_bimanual_workspace
+# except the task's dataset loader is swapped for the LeRobot adapter and
+# dataset_path points at a LeRobot ROOT dir (data/ meta/ videos/).
+#
+# Launch (`task: umi_bimanual` resolves from the LOCAL vendored config/task/):
+#   python pipeline/Manip_Flow/scripts/train_flow_umi.py \
+#       --config-name train_flow_lerobot_umi_pnp \
+#       task.dataset_path=/data/nas_ray/.../umi-pnp-table
+#
+# See config/train_flow_unet_umi_bimanual_workspace.yaml for the frame-budget
+# contract and all policy/DiT knobs -- everything there applies here too.
+defaults:
+  - task: umi_bimanual
+  - _self_
+
+name: train_flow_dit_timm
+_target_: pipeline.Manip_Flow.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "lerobot_pnp"
+
+# planner-matched chunk (30fps capture, replan stride <= 16): horizon 12,
+# down_sample 3 -> 34 raw / 35 provider frames. See the sibling config's header.
+task:
+  action_horizon: 12
+  obs_down_sample_steps: 3
+  # LeRobot dataset ROOT (dir with data/ meta/ videos/). OVERRIDE on the CLI or
+  # here. NOT a .zarr.zip.
+  dataset_path: &dataset_path /data/nas_ray/home/eason.er/datasets/umi-pnp-table
+  # swap UMI's UmiDataset (zarr.zip) for the LeRobot->UMI in-memory adapter
+  dataset:
+    _target_: pipeline.Manip_Flow.dataset.lerobot_umi_dataset.LeRobotUmiDataset
+    shape_meta: ${task.shape_meta}
+    dataset_path: *dataset_path
+    cache_dir: null
+    pose_repr: ${task.pose_repr}
+    action_padding: False
+    temporally_independent_normalization: False
+    repeat_frame_prob: 0.0
+    seed: 42
+    val_ratio: 0.05
+    # max_episodes: 4      # uncomment for a fast smoke run
+
+n_action_steps: 8
+
+policy:
+  _target_: pipeline.Manip_Flow.policy.flow_timm_policy.FlowTimmPolicy
+  shape_meta: ${shape_meta}
+
+  obs_encoder:
+    _target_: pipeline.Manip_Flow.model.vision.timm_obs_encoder.TimmObsEncoder
+    shape_meta: ${shape_meta}
+    model_name: 'vit_base_patch16_dinov3.lvd1689m'
+    pretrained: True
+    frozen: False
+    global_pool: ''
+    feature_aggregation: 'attention_pool_2d'
+    position_encording: 'sinusoidal'
+    downsample_ratio: 32
+    transforms:
+      - type: RandomCrop
+        ratio: 0.95
+      - _target_: torchvision.transforms.RandomRotation
+        degrees:
+          - -5.0
+          - 5.0
+        expand: false
+      - _target_: torchvision.transforms.ColorJitter
+        brightness: 0.3
+        contrast: 0.4
+        saturation: 0.5
+        hue: 0.08
+    use_group_norm: True
+    share_rgb_model: False
+    imagenet_norm: True
+
+  num_inference_steps: 8
+  time_embed_scale: 1000.0
+  time_sample: uniform
+  logit_normal_mean: 0.0
+  logit_normal_std: 1.0
+  train_flow_n_samples: 1
+
+  obs_as_global_cond: True
+
+  backbone: dit
+  dit_d_model: 512
+  dit_depth: 6
+  dit_n_heads: 8
+  dit_mlp_ratio: 4.0
+  dit_dropout: 0.0
+
+  diffusion_step_embed_dim: 128
+  down_dims: [256,512,1024]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: True
+
+ema:
+  _target_: pipeline.Manip_Flow.model.diffusion.ema_model.EMAModel
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+dataloader:
+  batch_size: 32
+  num_workers: 8
+  shuffle: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 32
+  num_workers: 8
+  shuffle: False
+  pin_memory: True
+  persistent_workers: True
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 3.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: False
+  lr_scheduler: cosine
+  lr_warmup_steps: 2000
+  num_epochs: 100
+  gradient_accumulate_every: 1
+  use_ema: True
+  freeze_encoder: False
+  rollout_every: 10
+  checkpoint_every: 10
+  val_every: 5
+  sample_every: 5
+  max_train_steps: null
+  max_val_steps: null
+  tqdm_interval_sec: 1.0
+
+logging:
+  project: umi_flow
+  resume: False
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    monitor_key: train_loss
+    mode: min
+    k: 20
+    format_str: 'epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}

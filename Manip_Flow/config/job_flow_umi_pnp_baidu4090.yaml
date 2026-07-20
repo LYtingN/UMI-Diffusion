@@ -1,0 +1,32 @@
+cluster: baidu_4090      
+num_gpus: 8
+image: "ai-base:ubuntu22.04-sim5.0.0-lab_MD2.2.1-ray2.52.0-cu12.8_devel-v1.4"
+
+git_workspace:
+  token: GH_PAT
+  repos:
+    - repo_url: https://github.com/LYtingN/Motion_Prior_Manipualtion.git
+      commit_sha: main        
+
+os_env_vars:
+  GH_PAT: "REPLACE_WITH_GITHUB_PAT"
+  WANDB_MODE: "offline"
+
+tasks:
+  - name: flow_umi_pnp
+    type: torch_trainer
+    run_name: flow_dit_pnp_table
+    streaming: true
+    cmd: |
+      set -e
+      RUN_TS="$(date +%Y.%m.%d-%H.%M.%S)"
+      OUT="data/outputs/${RUN_TS}_flow_dit_pnp_table"
+      echo "[launch] accelerate 8-proc, shared output_dir=${OUT}"
+      accelerate launch \
+        --num_processes=8 --num_machines=1 --machine_rank=0 \
+        --dynamo_backend=no \
+        pipeline/Manip_Flow/scripts/train_flow_umi.py \
+        --config-name train_flow_lerobot_umi_pnp \
+        task.dataset_path=/data/nas_ray/home/eason.er/datasets/umi-pnp-table \
+        logging.mode=offline \
+        hydra.run.dir="${OUT}"

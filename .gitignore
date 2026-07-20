@@ -1,0 +1,3 @@
+
+# local, untracked job configs holding real secrets (e.g. GH_PAT) — never commit
+*.local.yaml
