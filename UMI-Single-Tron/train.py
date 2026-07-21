@@ -19,7 +19,7 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 @hydra.main(
     version_base=None,
-    config_path=str(pathlib.Path(__file__).parent.joinpath(
+    config_path=str(pathlib.Path(__file__).resolve().parent.joinpath(
         'diffusion_policy','config'))
 )
 def main(cfg: OmegaConf):
