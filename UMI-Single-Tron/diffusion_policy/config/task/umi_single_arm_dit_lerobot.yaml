@@ -1,0 +1,96 @@
+name: umi_single_arm_dit
+
+# ── Timing ────────────────────────────────────────────────────────────
+# Demonstrations recorded at 60 Hz; downsample 3× → 20 Hz policy rate
+camera_obs_latency: 0.125
+robot_obs_latency:  0.0001
+gripper_obs_latency: 0.02
+dataset_frequeny: 0          # set at runtime (e.g. 20.0)
+
+obs_down_sample_steps: 3     # 60 Hz → 20 Hz
+low_dim_obs_horizon: 2       # To = 2
+img_obs_horizon:     2       # To = 2
+action_horizon: 32           # Tp = 32
+ignore_proprioception: False
+
+# ── Shape meta ────────────────────────────────────────────────────────
+shape_meta: &shape_meta
+  obs:
+    # Single wrist RGB camera only (no head / look-at-point cameras)
+    camera0_rgb:
+      shape: [3, 224, 224]
+      horizon: ${task.img_obs_horizon}
+      latency_steps: 0
+      down_sample_steps: ${task.obs_down_sample_steps}
+      type: rgb
+      ignore_by_policy: False
+
+    robot0_eef_pos:
+      shape: [3]
+      horizon: ${task.low_dim_obs_horizon}
+      latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'}
+      down_sample_steps: ${task.obs_down_sample_steps}
+      type: low_dim
+      ignore_by_policy: ${task.ignore_proprioception}
+
+    robot0_eef_rot_axis_angle:
+      raw_shape: [3]
+      shape: [6]               # 6D rotation representation
+      horizon: ${task.low_dim_obs_horizon}
+      latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.robot_obs_latency}) * ${task.dataset_frequeny}'}
+      down_sample_steps: ${task.obs_down_sample_steps}
+      type: low_dim
+      rotation_rep: rotation_6d
+      ignore_by_policy: ${task.ignore_proprioception}
+
+    # NOTE: robot0_eef_rot_axis_angle_wrt_start was REMOVED on purpose.
+    # With relative obs/action repr it encodes "how far along the trajectory
+    # we are" (episode-start-referenced pose), which lets the DiT regress the
+    # 32-step action from proprioception alone and starves the vision branch of
+    # gradient (model plays open-loop, ignoring the camera). See memory
+    # umi-single-tron-vision-ignored. Re-add this block only if you have a
+    # concrete reason and have confirmed vision is being used.
+
+    robot0_gripper_width:
+      shape: [1]
+      horizon: ${task.low_dim_obs_horizon}
+      latency_steps: ${eval:'(${task.camera_obs_latency} - ${task.gripper_obs_latency}) * ${task.dataset_frequeny}'}
+      down_sample_steps: ${task.obs_down_sample_steps}
+      type: low_dim
+      ignore_by_policy: ${task.ignore_proprioception}
+
+  # action: [pos(3) + rot_6d(6) + gripper(1)] = 10-D
+  action:
+    shape: [10]
+    horizon: ${task.action_horizon}
+    latency_steps: 0
+    down_sample_steps: ${task.obs_down_sample_steps}
+    rotation_rep: rotation_6d
+
+# ── Misc ──────────────────────────────────────────────────────────────
+task_name: &task_name umi_single_arm_dit
+# LeRobot dataset ROOT (dir with data/ meta/ videos/). OVERRIDE on the CLI.
+# NOT a .zarr.zip.
+dataset_path: /data/nas_ray/home/eason.er/datasets/umi-pnp-table
+
+pose_repr: &pose_repr
+  obs_pose_repr: relative
+  action_pose_repr: relative
+
+env_runner:
+  _target_: diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner
+
+dataset:
+  # single-arm LeRobot -> UMI in-memory adapter (keeps LEFT arm only)
+  _target_: diffusion_policy.dataset.lerobot_umi_dataset.LeRobotUmiDataset
+  shape_meta: *shape_meta
+  dataset_path: ${task.dataset_path}
+  cache_dir: null
+  pose_repr: *pose_repr
+  action_padding: False
+  temporally_independent_normalization: False
+  repeat_frame_prob: 0.0
+  max_duration: null
+  seed: 42
+  val_ratio: 0.05
+  # max_episodes: 4      # uncomment for a fast smoke run

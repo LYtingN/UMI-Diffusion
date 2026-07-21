@@ -1,0 +1,165 @@
+defaults:
+  - _self_
+  - task: umi_single_arm_dit_lerobot
+
+name: train_diffusion_dit_timm
+_target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "lerobot_pnp"
+
+n_action_steps: 8   # execute first 8 of 32 predicted steps
+
+# ── Policy ─────────────────────────────────────────────────────────────
+policy:
+  _target_: diffusion_policy.policy.diffusion_dit_timm_policy.DiffusionDiTTimmPolicy
+
+  shape_meta: ${shape_meta}
+
+  # DDIM scheduler — 100 train steps, 16 inference steps
+  noise_scheduler:
+    _target_: diffusers.DDIMScheduler
+    num_train_timesteps: 100
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 0
+    prediction_type: epsilon
+
+  # Observation encoder: DINOv3 ViT-B/16 finetuned (not frozen)
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.timm_obs_encoder.TimmObsEncoder
+    shape_meta: ${shape_meta}
+
+    # DINOv3 ViT-B/16 — outputs 768-d CLS token per image.
+    # TimmObsEncoder forces the CLS token for any 'vit*' backbone (see
+    # aggregate_feature) and DiffusionDiTTimmPolicy infers obs_feature_dim from
+    # obs_encoder.output_shape() at build time, so the DiT conditioning
+    # projection adapts to DINOv3 automatically — no policy change needed.
+    model_name: 'vit_base_patch16_dinov3.lvd1689m'
+    pretrained: True
+    frozen: False        # finetune the backbone end-to-end
+    # DINOv3 ViT-B/16 native input is 224×224; matches our dataset.
+    img_size: 224
+
+    global_pool: ''      # return CLS token (not global-avg-pool)
+    feature_aggregation: null   # ViT CLS token needs no extra pooling
+
+    downsample_ratio: 32   # unused for ViT, kept for config completeness
+
+    transforms:
+      - type: RandomCrop
+        ratio: 0.95
+      - _target_: torchvision.transforms.ColorJitter
+        brightness: 0.3
+        contrast: 0.4
+        saturation: 0.5
+        hue: 0.08
+
+    use_group_norm: True
+    share_rgb_model: False
+    imagenet_norm: True   # DINOv3 also uses ImageNet mean/std
+
+  # DiT backbone: dim=768, depth=10, heads=12, MLP-ratio=4, RMSNorm
+  n_layer: 10
+  n_head: 12
+  n_emb: 768
+  mlp_ratio: 4
+  p_drop_attn: 0.1
+
+  num_inference_steps: 16
+  input_pertub: 0.1          # DDPM-IP exposure-bias mitigation
+  train_diffusion_n_samples: 8   # 8 noise samples per obs encoder pass
+
+  # Widen the vision bottleneck: project obs feature into 8 conditioning tokens
+  # instead of obs_horizon (=2), so DINOv3 CLS features aren't crammed against
+  # proprioception in 2 tokens. See memory umi-single-tron-vision-ignored.
+  n_obs_tokens: 8
+
+# ── EMA ────────────────────────────────────────────────────────────────
+ema:
+  _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+# ── DataLoaders ────────────────────────────────────────────────────────
+dataloader:
+  batch_size: 32      # DiT is heavier; reduce if OOM
+  num_workers: 8
+  shuffle: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 32
+  num_workers: 8
+  shuffle: False
+  pin_memory: True
+  persistent_workers: True
+
+# ── Optimizer ──────────────────────────────────────────────────────────
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  weight_decay: 1.0e-4
+
+# ── Training ───────────────────────────────────────────────────────────
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: False
+  lr_scheduler: cosine
+  lr_warmup_steps: 1000
+  num_epochs: 300
+  gradient_accumulate_every: 1
+  use_ema: True
+  freeze_encoder: False
+  rollout_every: 20
+  checkpoint_every: 10
+  val_every: 1
+  sample_every: 5
+  max_train_steps: null
+  max_val_steps: null
+  tqdm_interval_sec: 1.0
+
+# ── Logging ────────────────────────────────────────────────────────────
+logging:
+  project: umi
+  resume: False
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+# ── Checkpoint ─────────────────────────────────────────────────────────
+checkpoint:
+  topk:
+    monitor_key: train_loss
+    mode: min
+    k: 20
+    format_str: 'epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}

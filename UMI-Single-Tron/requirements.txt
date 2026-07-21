@@ -1,0 +1,23 @@
+# Runtime dependencies for training train_diffusion_dit_timm_umi_workspace.
+# Versions mirror the original umi-diffusion-training conda_environment.yaml.
+# Install torch/torchvision matching your CUDA (e.g. pytorch 2.1.0 + cu121).
+
+torch==2.1.0
+torchvision==0.16.0
+numpy==1.24.*
+scipy==1.11.*
+pandas==2.1.*
+zarr==2.16.*
+numcodecs==0.11.*
+imagecodecs==2023.9.18
+hydra-core==1.2.0
+omegaconf
+wandb==0.15.8
+dill==0.3.7
+einops==0.6.1
+diffusers==0.18.2
+timm==0.9.7
+accelerate==0.24.*
+threadpoolctl==3.2.*
+filelock
+tqdm
