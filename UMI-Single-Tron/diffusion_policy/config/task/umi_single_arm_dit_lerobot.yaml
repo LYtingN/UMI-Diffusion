@@ -69,9 +69,11 @@ shape_meta: &shape_meta
 
 # ── Misc ──────────────────────────────────────────────────────────────
 task_name: &task_name umi_single_arm_dit
-# LeRobot dataset ROOT (dir with data/ meta/ videos/). OVERRIDE on the CLI.
-# NOT a .zarr.zip.
-dataset_path: /data/nas_ray/home/eason.er/datasets/umi-pnp-table
+# UMI ReplayBuffer .npz (data__*/meta__* archive). OVERRIDE on the CLI.
+# NOTE: this task's shape_meta intentionally omits *_wrt_start (see comment
+# above); UmiDataset only synthesizes wrt_start when shape_meta lists it, so
+# the progress-leak fix carries over to the npz path unchanged.
+dataset_path: /data/nas_ray/home/eason.er/datasets/umi-on-tron/dataset_raw_cq_jc.npz
 
 pose_repr: &pose_repr
   obs_pose_repr: relative
@@ -81,8 +83,8 @@ env_runner:
   _target_: diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner
 
 dataset:
-  # single-arm LeRobot -> UMI in-memory adapter (keeps LEFT arm only)
-  _target_: diffusion_policy.dataset.lerobot_umi_dataset.LeRobotUmiDataset
+  # UMI ReplayBuffer loaded directly from .npz (native data__/meta__ archive)
+  _target_: diffusion_policy.dataset.umi_dataset.UmiDataset
   shape_meta: *shape_meta
   dataset_path: ${task.dataset_path}
   cache_dir: null
@@ -93,4 +95,3 @@ dataset:
   max_duration: null
   seed: 42
   val_ratio: 0.05
-  # max_episodes: 4      # uncomment for a fast smoke run
