@@ -68,6 +68,9 @@ class TimmObsEncoder(ModuleAttrMixin):
             feature_aggregation: str='spatial_embedding',
             downsample_ratio: int=32,
             position_encording: str='learnable',
+            # partial unfreeze: freeze the whole backbone, then re-enable grads on
+            # only the last N transformer blocks (+ final norm). ViT only. 0 = off.
+            finetune_last_n_blocks: int=0,
 
         ):
         """
@@ -90,11 +93,37 @@ class TimmObsEncoder(ModuleAttrMixin):
             num_classes=0            # remove classification layer
         )
 
+        is_vit = model_name.startswith('vit')
+        # DINOv3 prepends 1 CLS + 4 register tokens (num_prefix_tokens=5); plain
+        # ViTs have 1. Everything after the prefix is a patch token laid out on
+        # the feature grid. Use the model's own attribute so we never slice
+        # register tokens into the spatial map by accident.
+        self.num_prefix_tokens = int(getattr(model, 'num_prefix_tokens', 1)) if is_vit else 0
+
         if frozen:
             assert pretrained
             for param in model.parameters():
                 param.requires_grad = False
-        
+        elif finetune_last_n_blocks > 0:
+            # Freeze everything, then thaw only the last N blocks + final norm.
+            assert pretrained
+            assert is_vit, "finetune_last_n_blocks currently supports ViT backbones only"
+            assert hasattr(model, 'blocks'), f"{model_name} has no .blocks to partially unfreeze"
+            for param in model.parameters():
+                param.requires_grad = False
+            n = min(int(finetune_last_n_blocks), len(model.blocks))
+            for blk in model.blocks[-n:]:
+                for param in blk.parameters():
+                    param.requires_grad = True
+            if hasattr(model, 'norm') and model.norm is not None:
+                for param in model.norm.parameters():
+                    param.requires_grad = True
+            n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            logger.info(
+                "partial unfreeze: last %d/%d blocks + norm trainable (%.1fM params)",
+                n, len(model.blocks), n_train / 1e6,
+            )
+
         feature_dim = None
         if model_name.startswith('resnet'):
             # the last layer is nn.Identity() because num_classes is 0
@@ -179,15 +208,29 @@ class TimmObsEncoder(ModuleAttrMixin):
         self.low_dim_keys = low_dim_keys
         self.key_shape_map = key_shape_map
         self.feature_aggregation = feature_aggregation
-        if model_name.startswith('vit'):
-            # assert self.feature_aggregation is None # vit uses the CLS token
-            if self.feature_aggregation == 'all_tokens':
-                # Use all tokens from ViT
-                pass
-            elif self.feature_aggregation is not None:
-                logger.warn(f'vit will use the CLS token. feature_aggregation ({self.feature_aggregation}) is ignored!')
+        self.vit_grid_size = None
+        if is_vit:
+            # ViT: feature_dim is the embed dim. The patch grid must be computed
+            # from OUR input resolution (image_shape) and the patch size, NOT
+            # patch_embed.grid_size -- that static attr reflects the model's
+            # default_cfg input (256->16x16 for DINOv3) and is wrong whenever we
+            # feed a different size (224->14x14). Getting this wrong desyncs the
+            # AttentionPool2d positional embedding from the real token count.
+            feature_dim = int(getattr(model, 'num_features', None) or model.embed_dim)
+            patch = getattr(getattr(model, 'patch_embed', None), 'patch_size', None)
+            if patch is not None:
+                ps = (int(patch[0]), int(patch[1])) if isinstance(patch, (tuple, list)) else (int(patch), int(patch))
+                gh, gw = image_shape[0] // ps[0], image_shape[1] // ps[1]
+                self.vit_grid_size = (gh, gw)
+                feature_map_shape = [gh, gw]
+            supported = ('attention_pool_2d', 'all_tokens', None)
+            if self.feature_aggregation not in supported:
+                logger.warn(
+                    f'vit supports feature_aggregation in {supported}; got '
+                    f'{self.feature_aggregation!r} -> falling back to CLS token.'
+                )
                 self.feature_aggregation = None
-        
+
         if self.feature_aggregation == 'soft_attention':
             self.attention = nn.Sequential(
                 nn.Linear(feature_dim, 1, bias=False),
@@ -221,9 +264,24 @@ class TimmObsEncoder(ModuleAttrMixin):
 
     def aggregate_feature(self, feature):
         if self.model_name.startswith('vit'):
-            assert self.feature_aggregation is None # vit uses the CLS token
-            return feature[:, 0, :]
-        
+            # feature: (B, num_prefix_tokens + H*W, C). Prefix = CLS (+ registers
+            # for DINOv3); the rest are patch tokens on the H*W grid.
+            if self.feature_aggregation is None:
+                return feature[:, 0, :]  # CLS token
+
+            patch = feature[:, self.num_prefix_tokens:, :]  # (B, H*W, C)
+            if self.feature_aggregation == 'all_tokens':
+                # flatten every patch token into the global-cond vector
+                return patch.reshape(patch.shape[0], -1)
+            if self.feature_aggregation == 'attention_pool_2d':
+                # AttentionPool2d wants NCHW; reshape patch tokens back to grid
+                B, N, C = patch.shape
+                H, W = self.vit_grid_size
+                assert N == H * W, f"expected {H*W} patch tokens, got {N}"
+                grid = patch.transpose(1, 2).reshape(B, C, H, W)
+                return self.attention_pool_2d(grid)
+            raise RuntimeError(f"unhandled vit feature_aggregation {self.feature_aggregation!r}")
+
         # resnet
         assert len(feature.shape) == 4
         if self.feature_aggregation == 'attention_pool_2d':

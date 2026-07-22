@@ -52,10 +52,22 @@ policy:
   obs_encoder:
     _target_: Manip_Flow.model.vision.timm_obs_encoder.TimmObsEncoder
     shape_meta: ${shape_meta}
+    # ViT-B/16 (~86M) for the strongest frozen features: with the backbone
+    # frozen, a bigger pretrained tower is "free" stronger features and does not
+    # add overfitting risk -- only the trainable params do. DINOv3's dense patch
+    # tokens (its main gain over v2) are what attention_pool_2d consumes below.
     model_name: 'vit_base_patch16_dinov3.lvd1689m'
     pretrained: True
+    # partial finetune: freeze the backbone, thaw only the last 2 blocks + norm.
+    # ViT-B blocks are ~7M each, so 2 blocks (~14M) keeps trainable visual params
+    # inside the 5-20M budget for ~200 demos; 3 would overshoot (~21M). frozen
+    # must be False for the unfreeze to take effect.
     frozen: False
+    finetune_last_n_blocks: 2
     global_pool: ''
+    # attention_pool_2d now actually runs for ViT (was silently ignored -> CLS
+    # only): the 196 patch tokens are attention-pooled to one vector per
+    # camera/frame, keeping spatial detail the CLS token averaged away.
     feature_aggregation: 'attention_pool_2d'
     position_encording: 'sinusoidal'
     downsample_ratio: 32
@@ -73,7 +85,9 @@ policy:
         saturation: 0.5
         hue: 0.08
     use_group_norm: True
-    share_rgb_model: False
+    # left/right wrist cameras share one encoder: halves visual params and data
+    # need; wrist views are similar enough that sharing rarely costs accuracy.
+    share_rgb_model: True
     imagenet_norm: True
 
   num_inference_steps: 8
