@@ -28,7 +28,7 @@ task:
   obs_down_sample_steps: 3
   # LeRobot dataset ROOT (dir with data/ meta/ videos/). OVERRIDE on the CLI or
   # here. NOT a .zarr.zip.
-  dataset_path: &dataset_path /data/nas_ray/home/eason.er/datasets/umi-pnp-table
+  dataset_path: &dataset_path /data/nas_ray/home/eason.er/datasets/G1-manipulation/umi-pickand-place-0722
   # swap UMI's UmiDataset (zarr.zip) for the LeRobot->UMI in-memory adapter
   dataset:
     _target_: Manip_Flow.dataset.lerobot_umi_dataset.LeRobotUmiDataset

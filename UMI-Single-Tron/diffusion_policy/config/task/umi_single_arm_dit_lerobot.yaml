@@ -43,14 +43,6 @@ shape_meta: &shape_meta
       rotation_rep: rotation_6d
       ignore_by_policy: ${task.ignore_proprioception}
 
-    # NOTE: robot0_eef_rot_axis_angle_wrt_start was REMOVED on purpose.
-    # With relative obs/action repr it encodes "how far along the trajectory
-    # we are" (episode-start-referenced pose), which lets the DiT regress the
-    # 32-step action from proprioception alone and starves the vision branch of
-    # gradient (model plays open-loop, ignoring the camera). See memory
-    # umi-single-tron-vision-ignored. Re-add this block only if you have a
-    # concrete reason and have confirmed vision is being used.
-
     robot0_gripper_width:
       shape: [1]
       horizon: ${task.low_dim_obs_horizon}
