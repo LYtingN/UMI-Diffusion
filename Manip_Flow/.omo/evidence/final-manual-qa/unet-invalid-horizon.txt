@@ -1,0 +1,2 @@
+ValueError: unet backbone needs action horizon divisible by 4 (skip-connection concat), got 10; use backbone='dit' or change the horizon.
+EXPECTED_INVALID_HORIZON_FAILURE

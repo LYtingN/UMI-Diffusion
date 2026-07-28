@@ -65,6 +65,9 @@ class TimmObsEncoder(ModuleAttrMixin):
             # renormalize rgb input with imagenet normalization
             # assuming input in [0,1]
             imagenet_norm: bool=False,
+            # Explicit opt-in for normalization. Keep imagenet_norm accepted
+            # because existing configs set it while relying on its legacy no-op.
+            normalize_rgb: bool=False,
             feature_aggregation: str='spatial_embedding',
             downsample_ratio: int=32,
             position_encording: str='learnable',
@@ -83,17 +86,36 @@ class TimmObsEncoder(ModuleAttrMixin):
         low_dim_keys = list()
         key_model_map = nn.ModuleDict()
         key_transform_map = nn.ModuleDict()
+        key_eval_transform_map = nn.ModuleDict()
         key_shape_map = dict()
 
-        assert global_pool == ''
-        model = timm.create_model(
-            model_name=model_name,
-            pretrained=pretrained,
-            global_pool=global_pool, # '' means no pooling
-            num_classes=0            # remove classification layer
-        )
+        image_shape = None
+        obs_shape_meta = shape_meta['obs']
+        for key, attr in obs_shape_meta.items():
+            shape = tuple(attr['shape'])
+            type = attr.get('type', 'low_dim')
+            if type == 'rgb':
+                assert image_shape is None or image_shape == shape[1:]
+                image_shape = shape[1:]
 
+        assert global_pool == ''
         is_vit = model_name.startswith('vit')
+        if is_vit:
+            model = timm.create_model(
+                model_name=model_name,
+                pretrained=pretrained,
+                global_pool=global_pool,
+                num_classes=0,
+                img_size=image_shape[0],
+            )
+        else:
+            model = timm.create_model(
+                model_name=model_name,
+                pretrained=pretrained,
+                global_pool=global_pool,
+                num_classes=0,
+            )
+
         # DINOv3 prepends 1 CLS + 4 register tokens (num_prefix_tokens=5); plain
         # ViTs have 1. Everything after the prefix is a patch token laid out on
         # the feature grid. Use the model's own attribute so we never slice
@@ -157,14 +179,6 @@ class TimmObsEncoder(ModuleAttrMixin):
                     num_channels=x.num_features)
             )
         
-        image_shape = None
-        obs_shape_meta = shape_meta['obs']
-        for key, attr in obs_shape_meta.items():
-            shape = tuple(attr['shape'])
-            type = attr.get('type', 'low_dim')
-            if type == 'rgb':
-                assert image_shape is None or image_shape == shape[1:]
-                image_shape = shape[1:]
         if transforms is not None and not isinstance(transforms[0], torch.nn.Module):
             assert transforms[0].type == 'RandomCrop'
             ratio = transforms[0].ratio
@@ -172,7 +186,21 @@ class TimmObsEncoder(ModuleAttrMixin):
                 torchvision.transforms.RandomCrop(size=int(image_shape[0] * ratio)),
                 torchvision.transforms.Resize(size=image_shape[0], antialias=True)
             ] + transforms[1:]
+        if normalize_rgb:
+            normalize = torchvision.transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225],
+            )
+            transforms = ([] if transforms is None else transforms) + [normalize]
         transform = nn.Identity() if transforms is None else torch.nn.Sequential(*transforms)
+        eval_transform = (
+            torchvision.transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225],
+            )
+            if normalize_rgb
+            else nn.Identity()
+        )
 
         for key, attr in obs_shape_meta.items():
             shape = tuple(attr['shape'])
@@ -186,6 +214,7 @@ class TimmObsEncoder(ModuleAttrMixin):
 
                 this_transform = transform
                 key_transform_map[key] = this_transform
+                key_eval_transform_map[key] = eval_transform
             elif type == 'low_dim':
                 if not attr.get('ignore_by_policy', False):
                     low_dim_keys.append(key)
@@ -203,6 +232,7 @@ class TimmObsEncoder(ModuleAttrMixin):
         self.shape_meta = shape_meta
         self.key_model_map = key_model_map
         self.key_transform_map = key_transform_map
+        self.key_eval_transform_map = key_eval_transform_map
         self.share_rgb_model = share_rgb_model
         self.rgb_keys = rgb_keys
         self.low_dim_keys = low_dim_keys
@@ -323,6 +353,8 @@ class TimmObsEncoder(ModuleAttrMixin):
             img = img.reshape(B*T, *img.shape[2:])
             if self.training:
                 img = self.key_transform_map[key](img)
+            else:
+                img = self.key_eval_transform_map[key](img)
             raw_feature = self.key_model_map[key](img)
             feature = self.aggregate_feature(raw_feature)
             assert len(feature.shape) == 2 and feature.shape[0] == B * T

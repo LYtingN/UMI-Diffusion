@@ -1,0 +1,15 @@
+dataset_target= Manip_Flow.dataset.lerobot_umi_dataset.LeRobotUmiDataset
+dataset_path= /home/eason_er/nyx/Motion_Prior_Manipualtion/dataset/umi_diffusion/umi-pnp-table
+action_shape= [20] horizon= 12
+policy.num_inference_steps= 10
+policy.unet_time_log_scale= 10.0
+policy.time_embed_scale= 1.0
+policy.obs_encoder.model_name= vit_base_patch14_dinov2.lvd142m
+policy.obs_encoder.pretrained= True
+policy.obs_encoder.normalize_rgb= True
+logging.mode= disabled
+is_task_dataset_path_interpolation= True
+is_dataset_dataset_path_interpolation= True
+override_task_dataset_path= /tmp/cli-dataset
+override_nested_dataset_path= /tmp/cli-dataset
+HYDRA_COMPOSE_AND_OVERRIDE_PASS

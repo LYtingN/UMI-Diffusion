@@ -1,0 +1,153 @@
+defaults:
+  - task: umi_bimanual
+  - _self_
+
+name: train_flow_unet_humi_timm
+_target_: Manip_Flow.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "humi_unet_lerobot"
+
+task:
+  dataset_frequency: 30.0
+  obs_down_sample_steps: 2
+  low_dim_obs_horizon: 3
+  img_obs_horizon: 1
+  action_horizon: 36
+  dataset_path: ${oc.env:UMI_PNP_DATASET_PATH}
+  dataset:
+    _target_: Manip_Flow.dataset.lerobot_umi_dataset.LeRobotUmiDataset
+    shape_meta: ${task.shape_meta}
+    dataset_path: ${task.dataset_path}
+    cache_dir: null
+    pose_repr: ${task.pose_repr}
+    action_padding: False
+    temporally_independent_normalization: False
+    repeat_frame_prob: 0.0
+    seed: 42
+    val_ratio: 0.05
+
+n_action_steps: 8
+
+policy:
+  _target_: Manip_Flow.policy.flow_timm_policy.FlowTimmPolicy
+  shape_meta: ${shape_meta}
+
+  obs_encoder:
+    _target_: Manip_Flow.model.vision.timm_obs_encoder.TimmObsEncoder
+    shape_meta: ${shape_meta}
+    model_name: 'vit_base_patch14_dinov2.lvd142m'
+    pretrained: True
+    frozen: False
+    finetune_last_n_blocks: 0
+    global_pool: ''
+    feature_aggregation: null
+    position_encording: 'sinusoidal'
+    downsample_ratio: 32
+    transforms:
+      - type: RandomCrop
+        ratio: 0.95
+      - _target_: torchvision.transforms.ColorJitter
+        brightness: 0.3
+        contrast: 0.4
+        saturation: 0.5
+        hue: 0.08
+    use_group_norm: True
+    share_rgb_model: False
+    normalize_rgb: True
+
+  num_inference_steps: 10
+  time_embed_scale: 1.0
+  time_sample: uniform
+  logit_normal_mean: 0.0
+  logit_normal_std: 1.0
+  train_flow_n_samples: 1
+  obs_as_global_cond: True
+
+  backbone: unet
+  diffusion_step_embed_dim: 128
+  down_dims: [256,512,1024]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: True
+  unet_time_log_scale: 10.0
+
+ema:
+  _target_: Manip_Flow.model.diffusion.ema_model.EMAModel
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+dataloader:
+  batch_size: 32
+  num_workers: 8
+  shuffle: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 32
+  num_workers: 8
+  shuffle: False
+  pin_memory: True
+  persistent_workers: True
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 3.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: False
+  lr_scheduler: cosine
+  lr_warmup_steps: 2000
+  num_epochs: 100
+  gradient_accumulate_every: 1
+  use_ema: True
+  freeze_encoder: False
+  rollout_every: 10
+  checkpoint_every: 10
+  val_every: 5
+  sample_every: 5
+  max_train_steps: null
+  max_val_steps: null
+  tqdm_interval_sec: 1.0
+
+logging:
+  project: umi_flow
+  resume: False
+  mode: disabled
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    monitor_key: train_loss
+    mode: min
+    k: 20
+    format_str: 'epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}

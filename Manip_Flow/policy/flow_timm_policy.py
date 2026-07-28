@@ -70,6 +70,7 @@ class FlowTimmPolicy(BaseImagePolicy):
         kernel_size: int = 5,
         n_groups: int = 8,
         cond_predict_scale: bool = True,
+        unet_time_log_scale: float = 10000.0,
         # flow head
         time_embed_scale: float = 1000.0,
         time_sample: str = "uniform",  # 'uniform' or 'logit_normal'
@@ -119,6 +120,7 @@ class FlowTimmPolicy(BaseImagePolicy):
                 kernel_size=kernel_size,
                 n_groups=n_groups,
                 cond_predict_scale=cond_predict_scale,
+                time_log_scale=unet_time_log_scale,
             )
         else:
             raise ValueError(f"backbone must be 'dit' or 'unet', got {backbone!r}")

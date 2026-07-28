@@ -1,0 +1,14 @@
+rgb keys:          ['camera0_rgb', 'camera1_rgb']
+low_dim_keys keys: ['robot0_eef_pos', 'robot0_eef_pos_wrt1', 'robot0_eef_rot_axis_angle', 'robot0_eef_rot_axis_angle_wrt1', 'robot0_gripper_width', 'robot1_eef_pos', 'robot1_eef_pos_wrt0', 'robot1_eef_rot_axis_angle', 'robot1_eef_rot_axis_angle_wrt0', 'robot1_gripper_width']
+encoder_class= TimmObsEncoder
+encoder_model_name= vit_base_patch14_dinov2.lvd142m
+encoder_output_shape= (1, 3148)
+policy_backbone= unet
+policy_action_contract= (12, 20)
+policy_num_inference_steps= 10
+policy_time_embed_scale= 1.0
+unet_log_scale= 10.0
+global_cond_shape= (1, 3148)
+sample_shape= (1, 12, 20)
+sample_finite= True
+REAL_DINOV2_POLICY_SAMPLE_PASS

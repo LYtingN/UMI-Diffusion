@@ -1,0 +1,8 @@
+rgb keys:          ['camera0_rgb']
+low_dim_keys keys: []
+encoder_class= TimmObsEncoder
+encoder_model_name= convnext_base
+output_shape= (1, 1024)
+forward_shape= (1, 1024)
+finite= True
+REAL_CONVNEXT_CONSTRUCTION_PASS

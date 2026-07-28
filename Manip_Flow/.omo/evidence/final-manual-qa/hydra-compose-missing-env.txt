@@ -1,0 +1,4 @@
+InterpolationResolutionError: KeyError raised while resolving interpolation: "Environment variable 'UMI_PNP_DATASET_PATH' not found"
+    full_key: task.dataset.dataset_path
+    object_type=dict
+EXPECTED_MISSING_ENV_FAILURE
