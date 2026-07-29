@@ -20,7 +20,8 @@ EE from robot state -- it only merges the arrays the bridge sent with the images
 it decoded. See gripper_obs_provider.py / inference.py docstrings.
 
 Usage:
-    python -m Manip_Flow.policy_server --ckpt <policy.ckpt> --device cuda:0 --port 5570
+    python -m Manip_Flow.policy_server --ckpt <policy.ckpt> --device cuda:0 \
+        --port 5570 --rtc
 (run from the UMI-Diffusion repo root, or with it on PYTHONPATH.)
 """
 
@@ -47,6 +48,14 @@ if str(_REPO_ROOT) not in sys.path:
 from pipeline.Deploy.bridge import dp_wire  # noqa: E402
 
 
+class ImagePayloadTypeError(TypeError):
+    pass
+
+
+class PolicyRequestError(ValueError):
+    pass
+
+
 def _decode_jpeg(value) -> np.ndarray:
     """JPEG bytes (or base64 str) -> RGB uint8 (H, W, 3). Server-side only."""
     import base64
@@ -60,7 +69,9 @@ def _decode_jpeg(value) -> np.ndarray:
         if raw[:2] != b"\xff\xd8":  # not a JPEG SOI -> assume base64 text
             raw = base64.b64decode(value)
     else:
-        raise TypeError(f"unsupported image payload type: {type(value)}")
+        raise ImagePayloadTypeError(
+            f"unsupported image payload type: {type(value)}"
+        )
     return np.asarray(Image.open(io.BytesIO(raw)).convert("RGB"), dtype=np.uint8)
 
 
@@ -74,11 +85,15 @@ class DPPolicyServer:
         num_inference_steps: int | None = None,
         port: int = 5570,
         host: str = "*",
+        rtc_enabled: bool = False,
     ) -> None:
         from Manip_Flow.inference import FlowPolicyInference
 
         self.infer = FlowPolicyInference(
-            ckpt_path, device=device, num_inference_steps=num_inference_steps
+            ckpt_path,
+            device=device,
+            num_inference_steps=num_inference_steps,
+            rtc_enabled=rtc_enabled,
         )
         self.port = int(port)
         self.host = host
@@ -106,7 +121,9 @@ class DPPolicyServer:
         for name, jpegs in cameras.items():
             frames = [_decode_jpeg(j) for j in jpegs]
             if not frames:
-                raise ValueError(f"camera '{name}' had zero frames")
+                raise PolicyRequestError(
+                    f"camera '{name}' had zero frames"
+                )
             env_obs[name] = np.stack(frames, axis=0)
         for k, v in lowdim.items():
             env_obs[k] = np.asarray(v)
@@ -122,13 +139,18 @@ class DPPolicyServer:
                 action_dim=self.infer.action_dim,
                 obs_pose_repr=self.infer.obs_pose_repr,
                 action_pose_repr=self.infer.action_pose_repr,
+                rtc_enabled=self.infer.rtc_enabled,
+                action_fps=self.infer.action_fps,
             )
         if mtype == "predict":
-            req_id, cameras, lowdim, _start, _win = dp_wire.decode_predict_request(buf)
+            req_id, cameras, lowdim, start, _win = dp_wire.decode_predict_request(buf)
             t0 = time.perf_counter()
             try:
                 env_obs = self._assemble_env_obs(cameras, lowdim)
-                action = self.infer.predict_relative_action(env_obs)  # (Ta,20) raw rel
+                action = self.infer.predict_relative_action(
+                    env_obs,
+                    start=start,
+                )
             except Exception as exc:  # keep the server alive; report to the client
                 return dp_wire.encode_error(req_id, f"{type(exc).__name__}: {exc}")
             server_ms = (time.perf_counter() - t0) * 1e3
@@ -145,7 +167,9 @@ class DPPolicyServer:
             f"[policy_server] REP bound on tcp://{self.host}:{self.port}; "
             f"n_robots={self._n_robots} action=({self.infer.action_horizon},"
             f"{self.infer.action_dim}) obs_repr={self.infer.obs_pose_repr} "
-            f"action_repr={self.infer.action_pose_repr}",
+            f"action_repr={self.infer.action_pose_repr} "
+            f"action_fps={self.infer.action_fps:g} "
+            f"rtc={self.infer.rtc_enabled}",
             flush=True,
         )
         try:
@@ -166,6 +190,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="override policy num_inference_steps (default: ckpt value)")
     p.add_argument("--port", type=int, default=5570)
     p.add_argument("--host", default="*")
+    p.add_argument("--rtc", action="store_true",
+                   help="enable inference-time real-time chunking guidance")
     return p
 
 
@@ -173,7 +199,7 @@ def main() -> None:
     args = build_parser().parse_args()
     DPPolicyServer(
         args.ckpt, device=args.device, num_inference_steps=args.infer_steps,
-        port=args.port, host=args.host,
+        port=args.port, host=args.host, rtc_enabled=args.rtc,
     ).serve_forever()
 
 

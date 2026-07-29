@@ -16,6 +16,7 @@ pip_packages:
   - timm
   - diffusers
   - accelerate
+  - wandb==0.15.8
   - imagecodecs
   # LeRobot loader reads parquet proprio + mp4 video directly
   - pandas
@@ -30,28 +31,28 @@ log_folder: "logs"
 tasks:
   - name: flow_umi_pnp
     type: torch_trainer.train
-    run_name: flow_dit_pnp_table
+    run_name: flow_humi_unet_shared_dino_pnp_table
     # 由平台启动器托管分布式(自动注入 RANK/WORLD_SIZE/MASTER_ADDR 铺满全部 GPU,
     # 含多机);workspace 内部用 accelerate.Accelerator() 自动读取,无需手写 accelerate launch
     entry_module: Manip_Flow/scripts/train_flow_umi.py
     args:
       - "--config-name"
-      - "train_flow_lerobot_umi_pnp"
+      - "train_flow_unet_humi_lerobot_umi_pnp"
       # 实例化读的是 task.dataset.dataset_path(嵌套 key);顶层 task.dataset_path
       # 在 config 里用 YAML anchor 展开,覆盖顶层不会传导到嵌套,必须直接覆盖嵌套 key
       - "task.dataset.dataset_path=/data/nas_ray/home/eason.er/datasets/G1-manipulation/umi-pickand-place-0722"
       - "logging.mode=offline"
-      - "hydra.run.dir=data/outputs/flow_dit_pnp_table"
+      - "hydra.run.dir=data/outputs/flow_humi_unet_shared_dino_pnp_table"
       # 保守:16 卡 x 16 = 全局 batch 256(默认 32/卡会到 512,对 151 episodes 偏大),
       # lr 保持 config 默认 3e-4
       - "dataloader.batch_size=16"
       - "val_dataloader.batch_size=16"
-      - "training.num_epochs=400"
+      - "training.num_epochs=200"
 
 os_env_vars:
   GH_PAT: "REPLACE_WITH_GITHUB_PAT"
   WANDB_MODE: "offline"
-  # DINOv3 权重预下载到 NAS 共享缓存,worker 离线读取(config 用 pretrained: True)
+  # DINOv2 权重预下载到 NAS 共享缓存,worker 离线读取(config 用 pretrained: True)
   HF_HOME: "/data/nas_ray/home/eason.er/hf_cache"
   HF_HUB_OFFLINE: "1"
   TRANSFORMERS_OFFLINE: "1"

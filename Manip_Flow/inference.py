@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import time
 from typing import Callable, Dict, Optional
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -47,6 +48,10 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import numpy as np
+
+
+class DeploymentConfigError(ValueError):
+    pass
 
 
 class FlowPolicyInference:
@@ -59,6 +64,8 @@ class FlowPolicyInference:
         use_ema: bool = True,
         num_inference_steps: Optional[int] = None,
         tx_robot1_robot0: Optional[np.ndarray] = None,
+        rtc_enabled: bool = False,
+        rtc_target_fps: float = 30.0,
     ) -> None:
         import dill
         import hydra
@@ -95,6 +102,18 @@ class FlowPolicyInference:
         )
         self.action_horizon = int(self.shape_meta["action"]["horizon"])
         self.action_dim = int(self.shape_meta["action"]["shape"][0])
+        dataset_frequency = float(cfg.task.dataset_frequency)
+        action_step = int(self.shape_meta["action"]["down_sample_steps"])
+        self.action_fps = dataset_frequency / action_step
+        self.rtc_enabled = bool(rtc_enabled)
+        self._rtc_state = None
+        if self.rtc_enabled:
+            from Manip_Flow.rtc_relative_action import RTCInferenceState
+
+            self._rtc_state = RTCInferenceState(
+                self.action_fps,
+                target_fps=rtc_target_fps,
+            )
 
     def frames_at_target_fps(self, dp_fps: float, target_fps: float = 30.0) -> int:
         """Planner frames one chunk yields after dp_adapter resampling."""
@@ -118,17 +137,26 @@ class FlowPolicyInference:
         actual replan stride. The effective provider window must cover the segment
         condition plus every preview that will execute before the next replan.
         """
+        if self.action_fps > 0.0 and abs(dp_fps - self.action_fps) > 1e-6:
+            raise DeploymentConfigError(
+                f"--dp-fps={dp_fps:g} disagrees with checkpoint action cadence "
+                f"{self.action_fps:g} Hz"
+            )
         if history_len < 1:
-            raise ValueError(f"history_len must be >= 1, got {history_len}")
+            raise DeploymentConfigError(
+                f"history_len must be >= 1, got {history_len}"
+            )
         if replan_stride < 1:
-            raise ValueError(f"replan_stride must be >= 1, got {replan_stride}")
+            raise DeploymentConfigError(
+                f"replan_stride must be >= 1, got {replan_stride}"
+            )
         n = self.frames_at_target_fps(dp_fps, target_fps) + history_len - 1
         lookahead_len = max(int(kp_window_len) - int(seg_len), 0)
         required = max(
             int(seg_len), int(replan_stride) + history_len + lookahead_len
         )
         if n < required:
-            raise ValueError(
+            raise DeploymentConfigError(
                 f"action chunk = {n} frames @ {target_fps:g} fps < planner "
                 f"requirement {required} for seg_len={seg_len}, stride="
                 f"{replan_stride}, history={history_len}, lookahead="
@@ -146,12 +174,22 @@ class FlowPolicyInference:
                 stacklevel=2,
             )
 
-    def predict_relative_action(self, env_obs: Dict[str, np.ndarray]) -> np.ndarray:
+    def predict_relative_action(
+        self,
+        env_obs: Dict[str, np.ndarray],
+        start: int = 0,
+    ) -> np.ndarray:
         """env_obs (see module docstring) -> RAW relative action (Ta, 20)."""
         import torch
         from Manip_Flow.common.pytorch_util import dict_apply
         from Manip_Flow.common.real_inference_util import get_real_umi_obs_dict
 
+        started_at = time.perf_counter()
+        rtc_inputs = (
+            self._rtc_state.prepare(env_obs, start)
+            if self._rtc_state is not None
+            else None
+        )
         obs_dict_np = get_real_umi_obs_dict(
             env_obs=env_obs,
             shape_meta=self.shape_meta,
@@ -164,10 +202,31 @@ class FlowPolicyInference:
             .unsqueeze(0)
             .to(self.device, dtype=self.policy.dtype),
         )
+        rtc_prefix = None
+        rtc_delay = 0
+        if rtc_inputs is not None and rtc_inputs.prefix is not None:
+            rtc_prefix = (
+                torch.from_numpy(rtc_inputs.prefix)
+                .unsqueeze(0)
+                .to(self.device, dtype=self.policy.dtype)
+            )
+            rtc_delay = rtc_inputs.inference_delay
         with torch.no_grad():
-            result = self.policy.predict_action(obs_dict, None)
+            result = self.policy.predict_action(
+                obs_dict,
+                None,
+                rtc_action_prefix=rtc_prefix,
+                rtc_inference_delay=rtc_delay,
+            )
         action = result["action"][0].detach().to("cpu").numpy()
         assert action.shape == (self.action_horizon, self.action_dim)
+        if rtc_inputs is not None:
+            self._rtc_state.complete(
+                action,
+                start,
+                rtc_inputs.current_bases,
+                time.perf_counter() - started_at,
+            )
         return action
 
     def make_dp_infer_fn(
@@ -185,6 +244,6 @@ class FlowPolicyInference:
         """
 
         def dp_infer_fn(start: int, seg_len: int) -> np.ndarray:  # noqa: ARG001
-            return self.predict_relative_action(obs_provider())
+            return self.predict_relative_action(obs_provider(), start=start)
 
         return dp_infer_fn

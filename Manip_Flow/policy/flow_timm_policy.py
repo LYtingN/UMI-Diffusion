@@ -48,6 +48,7 @@ from Manip_Flow.model.vision.timm_obs_encoder import TimmObsEncoder
 from Manip_Flow.policy.base_image_policy import BaseImagePolicy
 
 from Manip_Flow.model.flow_dit_1d import FlowDiT1D
+from Manip_Flow.policy import rtc_flow
 
 
 class FlowTimmPolicy(BaseImagePolicy):
@@ -78,6 +79,9 @@ class FlowTimmPolicy(BaseImagePolicy):
         logit_normal_std: float = 1.0,
         inpaint_fixed_action_prefix: bool = False,
         train_flow_n_samples: int = 1,
+        rtc_execution_horizon: int = 12,
+        rtc_max_guidance_weight: float = 5.0,
+        rtc_prefix_schedule: str = "exp",
         **kwargs,
     ):
         super().__init__()
@@ -106,7 +110,7 @@ class FlowTimmPolicy(BaseImagePolicy):
         elif backbone == "unet":
             levels = len(down_dims) - 1
             if action_horizon % (2**levels) != 0:
-                raise ValueError(
+                raise rtc_flow.FlowPolicyConfigError(
                     f"unet backbone needs action horizon divisible by {2**levels} "
                     f"(skip-connection concat), got {action_horizon}; use "
                     f"backbone='dit' or change the horizon."
@@ -123,13 +127,13 @@ class FlowTimmPolicy(BaseImagePolicy):
                 time_log_scale=unet_time_log_scale,
             )
         else:
-            raise ValueError(f"backbone must be 'dit' or 'unet', got {backbone!r}")
+            raise rtc_flow.FlowPolicyConfigError(
+                f"backbone must be 'dit' or 'unet', got {backbone!r}"
+            )
 
         self.obs_encoder = obs_encoder
         self.model = model
         self.normalizer = LinearNormalizer()
-        self.backbone = backbone
-        self.obs_feature_dim = obs_feature_dim
         self.action_dim = action_dim
         self.action_horizon = action_horizon
         self.obs_as_global_cond = obs_as_global_cond
@@ -141,6 +145,9 @@ class FlowTimmPolicy(BaseImagePolicy):
         self.logit_normal_std = float(logit_normal_std)
         self.inpaint_fixed_action_prefix = inpaint_fixed_action_prefix
         self.train_flow_n_samples = int(train_flow_n_samples)
+        self.rtc_execution_horizon = int(rtc_execution_horizon)
+        self.rtc_max_guidance_weight = float(rtc_max_guidance_weight)
+        self.rtc_prefix_schedule = str(rtc_prefix_schedule)
         self.kwargs = kwargs
 
     # ========= inference  ============
@@ -151,46 +158,40 @@ class FlowTimmPolicy(BaseImagePolicy):
         global_cond: Optional[torch.Tensor] = None,
         generator: Optional[torch.Generator] = None,
         num_inference_steps: Optional[int] = None,
+        rtc_action_prefix: Optional[torch.Tensor] = None,
+        rtc_inference_delay: int = 0,
         **kwargs,
     ) -> torch.Tensor:
-        model = self.model
-        n_steps = num_inference_steps or self.num_inference_steps
-
-        x0 = torch.randn(
-            size=condition_data.shape,
-            dtype=condition_data.dtype,
-            device=condition_data.device,
+        return rtc_flow.flow_euler_sample(
+            model=self.model,
+            condition_data=condition_data,
+            condition_mask=condition_mask,
+            global_cond=global_cond,
             generator=generator,
+            rtc_action_prefix=rtc_action_prefix,
+            rtc_inference_delay=rtc_inference_delay,
+            config=rtc_flow.FlowSamplingConfig(
+                inference_steps=num_inference_steps or self.num_inference_steps,
+                time_embed_scale=self.time_embed_scale,
+                action_horizon=self.action_horizon,
+                execution_horizon=self.rtc_execution_horizon,
+                max_guidance_weight=self.rtc_max_guidance_weight,
+                prefix_schedule=self.rtc_prefix_schedule,
+            ),
         )
-        x = x0
-
-        ts = torch.linspace(
-            0.0, 1.0, n_steps + 1, dtype=condition_data.dtype, device=x.device
-        )
-        B = x.shape[0]
-        for i in range(n_steps):
-            t = ts[i]
-            # pin conditioned entries to their interpolant on the flow path
-            pinned = (1.0 - t) * x0 + t * condition_data
-            x = torch.where(condition_mask, pinned, x)
-
-            t_batch = t.expand(B) * self.time_embed_scale
-            v = model(x, t_batch, local_cond=None, global_cond=global_cond)
-            x = x + v * (ts[i + 1] - ts[i])
-
-        # finally make sure conditioning is enforced exactly
-        x = torch.where(condition_mask, condition_data, x)
-        return x
 
     def predict_action(
         self,
         obs_dict: Dict[str, torch.Tensor],
         fixed_action_prefix: Optional[torch.Tensor] = None,
+        rtc_action_prefix: Optional[torch.Tensor] = None,
+        rtc_inference_delay: int = 0,
     ) -> Dict[str, torch.Tensor]:
-        """Same signature/semantics as DiffusionUnetTimmPolicy.predict_action.
-
+        """
         obs_dict: normalized-shape obs (unnormalized values), batched.
         fixed_action_prefix: UNNORMALIZED action prefix (inpainted if enabled).
+        rtc_action_prefix: UNNORMALIZED current-base-relative previous leftovers;
+            rtc_inference_delay is predicted latency in policy action tokens.
         Returns {'action': (B, Ta, 20), 'action_pred': same} unnormalized.
         """
         assert "past_action" not in obs_dict  # not implemented yet
@@ -206,16 +207,33 @@ class FlowTimmPolicy(BaseImagePolicy):
         )
         cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
 
+        if fixed_action_prefix is not None and rtc_action_prefix is not None:
+            raise rtc_flow.FlowPolicyConfigError(
+                "fixed_action_prefix and rtc_action_prefix are mutually exclusive"
+            )
         if fixed_action_prefix is not None and self.inpaint_fixed_action_prefix:
             n_fixed_steps = fixed_action_prefix.shape[1]
             cond_data[:, :n_fixed_steps] = fixed_action_prefix
             cond_mask[:, :n_fixed_steps] = True
             cond_data = self.normalizer["action"].normalize(cond_data)
 
+        normalized_rtc_prefix = None
+        if rtc_action_prefix is not None and rtc_action_prefix.shape[1] > 0:
+            prefix_steps = min(
+                rtc_action_prefix.shape[1],
+                self.action_horizon,
+            )
+            padded_prefix = torch.zeros_like(cond_data)
+            padded_prefix[:, :prefix_steps] = rtc_action_prefix[:, :prefix_steps]
+            normalized_rtc_prefix = self.normalizer["action"].normalize(
+                padded_prefix
+            )
         nsample = self.conditional_sample(
             condition_data=cond_data,
             condition_mask=cond_mask,
             global_cond=global_cond,
+            rtc_action_prefix=normalized_rtc_prefix,
+            rtc_inference_delay=rtc_inference_delay,
             **self.kwargs,
         )
 
@@ -227,13 +245,6 @@ class FlowTimmPolicy(BaseImagePolicy):
     # ========= training  ============
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
-
-    def _sample_t(self, n: int, device, dtype) -> torch.Tensor:
-        if self.time_sample == "logit_normal":
-            # SD3-style: concentrates supervision at mid-path times
-            z = torch.randn(n, device=device, dtype=dtype)
-            return torch.sigmoid(z * self.logit_normal_std + self.logit_normal_mean)
-        return torch.rand(n, device=device, dtype=dtype)
 
     def compute_loss(self, batch):
         assert "valid_mask" not in batch
@@ -254,7 +265,12 @@ class FlowTimmPolicy(BaseImagePolicy):
 
         x1 = nactions
         x0 = torch.randn(x1.shape, device=x1.device, dtype=x1.dtype)
-        t = self._sample_t(x1.shape[0], x1.device, x1.dtype)
+        t = rtc_flow.sample_flow_time(
+            x1.shape[0], x1.device, x1.dtype,
+            self.time_sample,
+            self.logit_normal_mean,
+            self.logit_normal_std,
+        )
 
         t_pad = t.view(-1, *([1] * (x1.ndim - 1)))
         xt = (1.0 - t_pad) * x0 + t_pad * x1

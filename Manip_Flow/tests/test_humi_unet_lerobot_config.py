@@ -1,4 +1,6 @@
+import os
 from pathlib import Path
+import subprocess
 
 import torch
 import torch.nn as nn
@@ -46,7 +48,9 @@ def test_humi_unet_config_matches_30hz_lerobot_temporal_contract() -> None:
     assert config.policy.obs_encoder.model_name == "vit_base_patch14_dinov2.lvd142m"
     assert config.policy.obs_encoder.pretrained is True
     assert config.policy.obs_encoder.frozen is False
+    assert config.policy.obs_encoder.share_rgb_model is True
     assert config.training.freeze_encoder is False
+    assert config.training.num_epochs == 200
     assert config.task.dataset_frequency == 30.0
     assert config.task.obs_down_sample_steps == 2
     assert config.task.dataset_frequency / config.task.obs_down_sample_steps == 15.0
@@ -54,6 +58,48 @@ def test_humi_unet_config_matches_30hz_lerobot_temporal_contract() -> None:
     assert config.task.low_dim_obs_horizon == 3
     assert config.shape_meta.action.horizon == 36
     assert config.shape_meta.action.down_sample_steps == 2
+    assert config.policy.rtc_execution_horizon == 12
+    assert config.policy.rtc_max_guidance_weight == 5.0
+    assert config.policy.rtc_prefix_schedule == "exp"
+
+
+def test_humi_unet_job_uses_the_shared_dino_config() -> None:
+    # Given: the production multi-GPU job definition.
+    job_config = OmegaConf.load(MANIP_FLOW_ROOT / "config" / "job_flow_umi_pnp_baidu4090.yaml")
+
+    # When: its Hydra command-line arguments are inspected.
+    args = list(job_config.tasks[0].args)
+    config_name_index = args.index("--config-name") + 1
+
+    # Then: production launches the HuMI-aligned shared-DINO policy for 200 epochs.
+    assert args[config_name_index] == "train_flow_unet_humi_lerobot_umi_pnp"
+    assert "training.num_epochs=200" in args
+    assert "wandb==0.15.8" in job_config.pip_packages
+
+
+def test_submit_script_resolves_the_job_config(tmp_path: Path) -> None:
+    fake_submitter = tmp_path / "md_ai_kit"
+    fake_submitter.write_text(
+        "#!/usr/bin/env bash\n"
+        "[[ \"$1\" == \"submit\" ]]\n"
+        "[[ -f \"$2\" ]]\n"
+        "grep -q train_flow_unet_humi_lerobot_umi_pnp \"$2\"\n"
+    )
+    fake_submitter.chmod(0o755)
+    env = os.environ.copy()
+    env["GH_PAT"] = "test-placeholder-token"
+    env["PATH"] = f"{tmp_path}:{env['PATH']}"
+
+    result = subprocess.run(
+        ["bash", str(MANIP_FLOW_ROOT / "scripts" / "submit_flow_umi_pnp.sh")],
+        cwd=MANIP_FLOW_ROOT.parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 class _FakeEncoder(nn.Module):

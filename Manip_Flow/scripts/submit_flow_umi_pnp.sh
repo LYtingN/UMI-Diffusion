@@ -8,7 +8,7 @@
 # never touches git.
 #
 #   export GH_PAT=github_pat_xxxxxxxx      # your GitHub token (Contents:read on the repo)
-#   bash pipeline/Manip_Flow/scripts/submit_flow_umi_pnp.sh
+#   bash Manip_Flow/scripts/submit_flow_umi_pnp.sh
 #
 # Notes:
 #   * git_workspace pulls code from the REMOTE, so push first: git push origin main
@@ -24,8 +24,8 @@ if [[ -z "${GH_PAT:-}" ]]; then
   exit 1
 fi
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-TEMPLATE="$REPO_ROOT/pipeline/Manip_Flow/config/job_flow_umi_pnp_baidu4090.yaml"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+TEMPLATE="$REPO_ROOT/Manip_Flow/config/job_flow_umi_pnp_baidu4090.yaml"
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "ERROR: config not found: $TEMPLATE" >&2
