@@ -177,6 +177,8 @@ class FlowTimmPolicy(BaseImagePolicy):
                 execution_horizon=self.rtc_execution_horizon,
                 max_guidance_weight=self.rtc_max_guidance_weight,
                 prefix_schedule=self.rtc_prefix_schedule,
+                latched_channels=tuple(
+                    i for i in range(self.action_dim) if i % 10 in (0, 1, 2, 9)),
             ),
         )
 
@@ -223,10 +225,8 @@ class FlowTimmPolicy(BaseImagePolicy):
                 rtc_action_prefix.shape[1],
                 self.action_horizon,
             )
-            padded_prefix = torch.zeros_like(cond_data)
-            padded_prefix[:, :prefix_steps] = rtc_action_prefix[:, :prefix_steps]
             normalized_rtc_prefix = self.normalizer["action"].normalize(
-                padded_prefix
+                rtc_action_prefix[:, :prefix_steps]
             )
         nsample = self.conditional_sample(
             condition_data=cond_data,

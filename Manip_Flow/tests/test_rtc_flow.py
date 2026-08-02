@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from Manip_Flow.policy import rtc_flow
 from Manip_Flow.policy.rtc_flow import rtc_guided_velocity, rtc_prefix_weights
 from Manip_Flow.rtc_relative_action import (
     RTCInferenceState,
@@ -99,3 +100,72 @@ def test_rtc_state_maps_planner_stride_and_latency_to_policy_tokens() -> None:
     assert second.prefix is not None
     assert second.prefix.shape == (28, 20)
     assert second.inference_delay == 4
+
+
+def test_rtc_carries_tail_position_progress_and_gripper_without_locking_rotation() -> None:
+    # Given: a 36-token action whose 8-token stride leaves a 28-token prefix.
+    # When: RTC builds guidance for task progress, gripper, and rotation channels.
+    weights = rtc_flow.rtc_action_prefix_weights(
+        inference_delay=4,
+        execution_horizon=12,
+        prefix_horizon=28,
+        total_horizon=36,
+        action_dim=20,
+        latched_channels=(0, 1, 2, 9, 10, 11, 12, 19),
+        schedule="exp",
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    # Then: old token-35 translation/close survives at 27; rotation stays free.
+    assert weights.shape == (36, 20)
+    assert weights[27, 0] == 1.0
+    assert weights[27, 12] == 1.0
+    assert weights[27, 9] == 1.0
+    assert weights[27, 19] == 1.0
+    assert weights[27, 8] == 0.0
+    assert weights[28, 9] == 0.0
+
+
+def test_rtc_sampling_hard_latches_tail_task_progress() -> None:
+    # Given: old translation/gripper progress lies beyond the soft pose horizon.
+    condition = torch.zeros((1, 4, 4), dtype=torch.float32)
+    condition_mask = torch.zeros_like(condition, dtype=torch.bool)
+    prefix = torch.zeros((1, 3, 4), dtype=torch.float32)
+    prefix[0, 2, 0] = 0.75
+    prefix[0, 2, 3] = 0.02
+
+    class ZeroVelocity(torch.nn.Module):
+        def forward(
+            self,
+            value: torch.Tensor,
+            _time: torch.Tensor,
+            local_cond: torch.Tensor | None,
+            global_cond: torch.Tensor | None,
+        ) -> torch.Tensor:
+            del local_cond, global_cond
+            return torch.zeros_like(value)
+
+    # When: a new sample is generated from a different random trajectory.
+    sampled = rtc_flow.flow_euler_sample(
+        model=ZeroVelocity(),
+        condition_data=condition,
+        condition_mask=condition_mask,
+        global_cond=None,
+        generator=torch.Generator().manual_seed(7),
+        rtc_action_prefix=prefix,
+        rtc_inference_delay=0,
+        config=rtc_flow.FlowSamplingConfig(
+            inference_steps=2,
+            time_embed_scale=1.0,
+            action_horizon=4,
+            execution_horizon=1,
+            max_guidance_weight=5.0,
+            prefix_schedule="linear",
+            latched_channels=(0, 3),
+        ),
+    )
+
+    # Then: tail progress is exact, not merely encouraged by soft guidance.
+    torch.testing.assert_close(sampled[0, :3, 0], prefix[0, :, 0])
+    torch.testing.assert_close(sampled[0, :3, 3], prefix[0, :, 3])
