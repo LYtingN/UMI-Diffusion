@@ -21,7 +21,7 @@ it decoded. See gripper_obs_provider.py / inference.py docstrings.
 
 Usage:
     python -m Manip_Flow.policy_server --ckpt <policy.ckpt> --device cuda:0 \
-        --port 5570 --rtc
+        --port 5570
 (run from the UMI-Diffusion repo root, or with it on PYTHONPATH.)
 """
 
@@ -85,7 +85,6 @@ class DPPolicyServer:
         num_inference_steps: int | None = None,
         port: int = 5570,
         host: str = "*",
-        rtc_enabled: bool = False,
     ) -> None:
         from Manip_Flow.inference import FlowPolicyInference
 
@@ -93,7 +92,6 @@ class DPPolicyServer:
             ckpt_path,
             device=device,
             num_inference_steps=num_inference_steps,
-            rtc_enabled=rtc_enabled,
         )
         self.port = int(port)
         self.host = host
@@ -139,7 +137,6 @@ class DPPolicyServer:
                 action_dim=self.infer.action_dim,
                 obs_pose_repr=self.infer.obs_pose_repr,
                 action_pose_repr=self.infer.action_pose_repr,
-                rtc_enabled=self.infer.rtc_enabled,
                 action_fps=self.infer.action_fps,
             )
         if mtype == "predict":
@@ -168,8 +165,7 @@ class DPPolicyServer:
             f"n_robots={self._n_robots} action=({self.infer.action_horizon},"
             f"{self.infer.action_dim}) obs_repr={self.infer.obs_pose_repr} "
             f"action_repr={self.infer.action_pose_repr} "
-            f"action_fps={self.infer.action_fps:g} "
-            f"rtc={self.infer.rtc_enabled}",
+            f"action_fps={self.infer.action_fps:g}",
             flush=True,
         )
         try:
@@ -190,8 +186,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="override policy num_inference_steps (default: ckpt value)")
     p.add_argument("--port", type=int, default=5570)
     p.add_argument("--host", default="*")
-    p.add_argument("--rtc", action="store_true",
-                   help="enable inference-time real-time chunking guidance")
     return p
 
 
@@ -199,7 +193,7 @@ def main() -> None:
     args = build_parser().parse_args()
     DPPolicyServer(
         args.ckpt, device=args.device, num_inference_steps=args.infer_steps,
-        port=args.port, host=args.host, rtc_enabled=args.rtc,
+        port=args.port, host=args.host,
     ).serve_forever()
 
 
