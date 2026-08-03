@@ -56,10 +56,11 @@ def mock_shape_meta(img_horizon: int = 2, low_horizon: int = 2, action_horizon: 
 
 class MockDPPolicyServer:
     def __init__(self, port: int = 5570, host: str = "*", action_horizon: int = 16,
-                 gripper_mid: float = 0.05):
+                 action_fps: float = 15.0, gripper_mid: float = 0.05):
         self.port = int(port)
         self.host = host
         self.action_horizon = int(action_horizon)
+        self.action_fps = float(action_fps)
         self.action_dim = 20
         self.shape_meta = mock_shape_meta(action_horizon=self.action_horizon)
         self.gripper_mid = float(gripper_mid)
@@ -77,7 +78,12 @@ class MockDPPolicyServer:
         mtype = msg.get("type")
         if mtype == "ping":
             return dp_wire.encode_pong(
-                self.shape_meta, self.action_horizon, self.action_dim, "relative", "relative"
+                self.shape_meta,
+                self.action_horizon,
+                self.action_dim,
+                "relative",
+                "relative",
+                self.action_fps,
             )
         if mtype == "predict":
             req_id, _cams, _low, _s, _w = dp_wire.decode_predict_request(buf)
@@ -108,6 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=5570)
     p.add_argument("--host", default="*")
     p.add_argument("--action-horizon", type=int, default=16)
+    p.add_argument("--action-fps", type=float, default=15.0)
     p.add_argument("--gripper-mid", type=float, default=0.05)
     return p
 
@@ -115,7 +122,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     MockDPPolicyServer(port=args.port, host=args.host,
-                       action_horizon=args.action_horizon, gripper_mid=args.gripper_mid).serve_forever()
+                       action_horizon=args.action_horizon, action_fps=args.action_fps,
+                       gripper_mid=args.gripper_mid).serve_forever()
 
 
 if __name__ == "__main__":

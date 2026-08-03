@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from Manip_Flow.inference import FlowPolicyInference
+from Manip_Flow.mock_policy_server import MockDPPolicyServer
 from Manip_Flow.policy_server import DPPolicyServer, build_parser
 from pipeline.Deploy.bridge import dp_wire
 
@@ -37,3 +38,15 @@ def test_policy_server_ping_reports_protocol_and_action_frequency() -> None:
     assert message["protocol_version"] == dp_wire.DP_PROTOCOL_VERSION
     assert message["action_fps"] == 15.0
     assert "rtc_enabled" not in message
+
+
+def test_mock_policy_server_reports_deploy_action_frequency() -> None:
+    # Given
+    server = MockDPPolicyServer(action_fps=15.0)
+
+    # When
+    message = dp_wire.decode_reply(server._handle(dp_wire.encode_ping()))
+
+    # Then
+    assert message["protocol_version"] == dp_wire.DP_PROTOCOL_VERSION
+    assert message["action_fps"] == 15.0
