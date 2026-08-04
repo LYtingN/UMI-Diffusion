@@ -44,37 +44,45 @@ def test_humi_unet_config_matches_30hz_lerobot_temporal_contract() -> None:
         # When: Hydra resolves task interpolation into machine-consumed shape metadata.
         config = compose(config_name="train_flow_unet_humi_lerobot_umi_pnp")
 
-    # Then: DINOv2 uses clean integer sampling on the 30 Hz LeRobot timeline.
-    assert config.policy.obs_encoder.model_name == "vit_base_patch14_dinov2.lvd142m"
+    # Then: the compact DINOv3 policy uses the 10 Hz, 100-demo contract.
+    assert config.policy.obs_encoder.model_name == "vit_base_patch16_dinov3.lvd1689m"
     assert config.policy.obs_encoder.pretrained is True
     assert config.policy.obs_encoder.frozen is False
-    assert config.policy.obs_encoder.share_rgb_model is True
+    assert config.policy.obs_encoder.finetune_last_n_blocks == 1
+    assert config.policy.obs_encoder.feature_aggregation == "attention_pool_2d"
+    assert config.policy.obs_encoder.normalize_rgb is True
+    assert config.policy.obs_encoder.share_rgb_model is False
+    assert list(config.policy.down_dims) == [96, 192, 384]
+    assert config.policy.num_inference_steps == 8
     assert config.training.freeze_encoder is False
-    assert config.training.num_epochs == 200
+    assert config.training.num_epochs == 100
+    assert config.task.dataset.val_ratio == 0.10
     assert config.task.dataset_frequency == 30.0
-    assert config.task.obs_down_sample_steps == 2
-    assert config.task.dataset_frequency / config.task.obs_down_sample_steps == 15.0
+    assert config.task.obs_down_sample_steps == 3
+    assert config.task.dataset_frequency / config.task.obs_down_sample_steps == 10.0
     assert config.task.img_obs_horizon == 1
     assert config.task.low_dim_obs_horizon == 3
-    assert config.shape_meta.action.horizon == 36
-    assert config.shape_meta.action.down_sample_steps == 2
+    assert config.shape_meta.action.horizon == 24
+    assert config.shape_meta.action.down_sample_steps == 3
     assert config.policy.rtc_execution_horizon == 12
     assert config.policy.rtc_max_guidance_weight == 5.0
     assert config.policy.rtc_prefix_schedule == "exp"
 
 
-def test_humi_unet_job_uses_the_shared_dino_config() -> None:
+def test_humi_unet_h100_job_uses_the_dinov3_config() -> None:
     # Given: the production multi-GPU job definition.
-    job_config = OmegaConf.load(MANIP_FLOW_ROOT / "config" / "job_flow_umi_pnp_baidu4090.yaml")
+    job_config = OmegaConf.load(MANIP_FLOW_ROOT / "config" / "job_flow_umi_h100.yaml")
 
     # When: its Hydra command-line arguments are inspected.
     args = list(job_config.tasks[0].args)
     config_name_index = args.index("--config-name") + 1
 
-    # Then: production launches the HuMI-aligned shared-DINO policy for 200 epochs.
+    # Then: production launches the 100-demo DINOv3 policy with global batch 128.
     assert args[config_name_index] == "train_flow_unet_humi_lerobot_umi_pnp"
-    assert "training.num_epochs=200" in args
-    assert "wandb==0.15.8" in job_config.pip_packages
+    assert "dataloader.batch_size=8" in args
+    assert "val_dataloader.batch_size=8" in args
+    assert "training.num_epochs=100" in args
+    assert "wandb>=0.18.0" in job_config.pip_packages
 
 
 def test_submit_script_resolves_the_job_config(tmp_path: Path) -> None:
@@ -109,7 +117,7 @@ class _FakeEncoder(nn.Module):
 
 def test_humi_unet_config_routes_time_scale_to_unet() -> None:
     # Given: the action contract and HuMI time-embedding parameters.
-    shape_meta = {"action": {"shape": [20], "horizon": 36}}
+    shape_meta = {"action": {"shape": [20], "horizon": 24}}
 
     # When: the policy constructs its configured UNet.
     policy = FlowTimmPolicy(

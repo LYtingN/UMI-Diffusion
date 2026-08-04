@@ -2,19 +2,21 @@ defaults:
   - task: umi_bimanual
   - _self_
 
-name: train_flow_unet_humi_timm
+name: train_flow_unet_humi_dinov3
 _target_: Manip_Flow.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
-exp_name: "humi_unet_lerobot"
+exp_name: "humi_unet_dinov3_dual_100demos"
 
 task:
   dataset_frequency: 30.0
-  obs_down_sample_steps: 2
+  # 10 Hz policy cadence. Horizon 24 spans 2.3 s and remains long enough for
+  # the real deploy's 16-frame async action lead plus the 50-frame Prior window.
+  obs_down_sample_steps: 3
   low_dim_obs_horizon: 3
   img_obs_horizon: 1
-  action_horizon: 36
+  action_horizon: 24
   dataset_path: ${oc.env:UMI_PNP_DATASET_PATH}
   dataset:
     _target_: Manip_Flow.dataset.lerobot_umi_dataset.LeRobotUmiDataset
@@ -26,7 +28,7 @@ task:
     temporally_independent_normalization: False
     repeat_frame_prob: 0.0
     seed: 42
-    val_ratio: 0.05
+    val_ratio: 0.10
 
 policy:
   _target_: Manip_Flow.policy.flow_timm_policy.FlowTimmPolicy
@@ -35,12 +37,12 @@ policy:
   obs_encoder:
     _target_: Manip_Flow.model.vision.timm_obs_encoder.TimmObsEncoder
     shape_meta: ${shape_meta}
-    model_name: 'vit_base_patch14_dinov2.lvd142m'
+    model_name: 'vit_base_patch16_dinov3.lvd1689m'
     pretrained: True
     frozen: False
-    finetune_last_n_blocks: 0
+    finetune_last_n_blocks: 1
     global_pool: ''
-    feature_aggregation: null
+    feature_aggregation: 'attention_pool_2d'
     position_encording: 'sinusoidal'
     downsample_ratio: 32
     transforms:
@@ -52,10 +54,10 @@ policy:
         saturation: 0.5
         hue: 0.08
     use_group_norm: True
-    share_rgb_model: True
+    share_rgb_model: False
     normalize_rgb: True
 
-  num_inference_steps: 10
+  num_inference_steps: 8
   time_embed_scale: 1.0
   time_sample: uniform
   logit_normal_mean: 0.0
@@ -68,7 +70,7 @@ policy:
 
   backbone: unet
   diffusion_step_embed_dim: 128
-  down_dims: [256,512,1024]
+  down_dims: [96, 192, 384]
   kernel_size: 5
   n_groups: 8
   cond_predict_scale: True
@@ -110,7 +112,7 @@ training:
   resume: False
   lr_scheduler: cosine
   lr_warmup_steps: 2000
-  num_epochs: 400
+  num_epochs: 100
   gradient_accumulate_every: 1
   use_ema: True
   freeze_encoder: False

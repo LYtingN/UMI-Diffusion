@@ -23,6 +23,6 @@ DATASET_PATH="${1:-/data/nas_ray/home/eason.er/datasets/umi-pnp-table}"
 shift || true
 
 exec "$PY" "$REPO_ROOT/Manip_Flow/scripts/train_flow_umi.py" \
-    --config-name train_flow_lerobot_umi_pnp \
+    --config-name train_flow_unet_humi_lerobot_umi_pnp \
     task.dataset_path="$DATASET_PATH" \
     "$@"

@@ -25,7 +25,7 @@ if [[ -z "${GH_PAT:-}" ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TEMPLATE="$REPO_ROOT/Manip_Flow/config/job_flow_umi_pnp_baidu4090.yaml"
+TEMPLATE="$REPO_ROOT/Manip_Flow/config/job_flow_umi_h100.yaml"
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "ERROR: config not found: $TEMPLATE" >&2
