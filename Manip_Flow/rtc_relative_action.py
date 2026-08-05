@@ -52,10 +52,6 @@ class RTCInferenceState:
             / self._target_fps
         )
         shift_tokens = int(round(shift_float))
-        if abs(shift_float - shift_tokens) > 1e-6:
-            raise RTCActionShapeError(
-                f"planner shift maps to fractional RTC token {shift_float}"
-            )
         prefix = reanchor_relative_action_prefix(
             self._previous_action,
             self._previous_bases,

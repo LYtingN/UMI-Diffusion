@@ -102,33 +102,28 @@ def test_rtc_state_maps_planner_stride_and_latency_to_policy_tokens() -> None:
     assert second.inference_delay == 4
 
 
-def test_rtc_carries_tail_position_progress_and_gripper_without_locking_rotation() -> None:
-    # Given: a 36-token action whose 8-token stride leaves a 28-token prefix.
-    # When: RTC builds guidance for task progress, gripper, and rotation channels.
-    weights = rtc_flow.rtc_action_prefix_weights(
-        inference_delay=4,
-        execution_horizon=12,
-        prefix_horizon=28,
-        total_horizon=36,
-        action_dim=20,
-        latched_channels=(0, 1, 2, 9, 10, 11, 12, 19),
-        schedule="exp",
-        device=torch.device("cpu"),
-        dtype=torch.float32,
-    )
+def test_rtc_state_accepts_fractional_planner_to_policy_stride() -> None:
+    # Given: a 10 Hz DP chunk consumed for 32 frames by a 30 Hz planner.
+    state = RTCInferenceState(action_fps=10.0, target_fps=30.0)
+    env_obs = {}
+    for arm in range(2):
+        env_obs[f"robot{arm}_eef_pos"] = np.zeros((1, 3))
+        env_obs[f"robot{arm}_eef_rot_axis_angle"] = np.zeros((1, 3))
+    action = np.zeros((40, 20), dtype=np.float32)
+    action[:, (3, 7, 13, 17)] = 1.0
+    first = state.prepare(env_obs, start=0)
+    state.complete(action, 0, first.current_bases, latency_s=0.1)
 
-    # Then: old token-35 translation/close survives at 27; rotation stays free.
-    assert weights.shape == (36, 20)
-    assert weights[27, 0] == 1.0
-    assert weights[27, 12] == 1.0
-    assert weights[27, 9] == 1.0
-    assert weights[27, 19] == 1.0
-    assert weights[27, 8] == 0.0
-    assert weights[28, 9] == 0.0
+    # When: the next H8/F32/P2 segment starts after the 32-frame stride.
+    second = state.prepare(env_obs, start=32)
+
+    # Then: RTC advances to the nearest policy token without rejecting the stride.
+    assert second.prefix is not None
+    assert second.prefix.shape == (29, 20)
 
 
-def test_rtc_sampling_hard_latches_tail_task_progress() -> None:
-    # Given: old translation/gripper progress lies beyond the soft pose horizon.
+def test_official_rtc_does_not_hard_latch_tail_channels() -> None:
+    # Given: old task progress lies beyond the official soft execution horizon.
     condition = torch.zeros((1, 4, 4), dtype=torch.float32)
     condition_mask = torch.zeros_like(condition, dtype=torch.bool)
     prefix = torch.zeros((1, 3, 4), dtype=torch.float32)
@@ -146,7 +141,7 @@ def test_rtc_sampling_hard_latches_tail_task_progress() -> None:
             del local_cond, global_cond
             return torch.zeros_like(value)
 
-    # When: a new sample is generated from a different random trajectory.
+    # When: a new sample is generated with official soft-prefix RTC guidance.
     sampled = rtc_flow.flow_euler_sample(
         model=ZeroVelocity(),
         condition_data=condition,
@@ -162,10 +157,8 @@ def test_rtc_sampling_hard_latches_tail_task_progress() -> None:
             execution_horizon=1,
             max_guidance_weight=5.0,
             prefix_schedule="linear",
-            latched_channels=(0, 3),
         ),
     )
 
-    # Then: tail progress is exact, not merely encouraged by soft guidance.
-    torch.testing.assert_close(sampled[0, :3, 0], prefix[0, :, 0])
-    torch.testing.assert_close(sampled[0, :3, 3], prefix[0, :, 3])
+    # Then: the tail stays free instead of being overwritten by custom latches.
+    assert not torch.isclose(sampled[0, 2, 0], prefix[0, 2, 0])

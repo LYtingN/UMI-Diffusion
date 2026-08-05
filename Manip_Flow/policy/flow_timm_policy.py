@@ -177,8 +177,6 @@ class FlowTimmPolicy(BaseImagePolicy):
                 execution_horizon=self.rtc_execution_horizon,
                 max_guidance_weight=self.rtc_max_guidance_weight,
                 prefix_schedule=self.rtc_prefix_schedule,
-                latched_channels=tuple(
-                    i for i in range(self.action_dim) if i % 10 in (0, 1, 2, 9)),
             ),
         )
 

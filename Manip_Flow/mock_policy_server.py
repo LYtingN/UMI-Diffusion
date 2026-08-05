@@ -84,6 +84,7 @@ class MockDPPolicyServer:
                 "relative",
                 "relative",
                 self.action_fps,
+                False,
             )
         if mtype == "predict":
             req_id, _cams, _low, _s, _w = dp_wire.decode_predict_request(buf)

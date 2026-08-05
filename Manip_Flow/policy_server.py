@@ -85,6 +85,7 @@ class DPPolicyServer:
         num_inference_steps: int | None = None,
         port: int = 5570,
         host: str = "*",
+        rtc_enabled: bool = True,
     ) -> None:
         from Manip_Flow.inference import FlowPolicyInference
 
@@ -92,6 +93,7 @@ class DPPolicyServer:
             ckpt_path,
             device=device,
             num_inference_steps=num_inference_steps,
+            rtc_enabled=rtc_enabled,
         )
         self.port = int(port)
         self.host = host
@@ -138,6 +140,7 @@ class DPPolicyServer:
                 obs_pose_repr=self.infer.obs_pose_repr,
                 action_pose_repr=self.infer.action_pose_repr,
                 action_fps=self.infer.action_fps,
+                rtc_enabled=self.infer.rtc_enabled,
             )
         if mtype == "predict":
             req_id, cameras, lowdim, start, _win = dp_wire.decode_predict_request(buf)
@@ -186,6 +189,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="override policy num_inference_steps (default: ckpt value)")
     p.add_argument("--port", type=int, default=5570)
     p.add_argument("--host", default="*")
+    rtc = p.add_mutually_exclusive_group()
+    rtc.add_argument("--rtc", dest="rtc_enabled", action="store_true")
+    rtc.add_argument("--no-rtc", dest="rtc_enabled", action="store_false")
+    p.set_defaults(rtc_enabled=True)
     return p
 
 
@@ -193,7 +200,7 @@ def main() -> None:
     args = build_parser().parse_args()
     DPPolicyServer(
         args.ckpt, device=args.device, num_inference_steps=args.infer_steps,
-        port=args.port, host=args.host,
+        port=args.port, host=args.host, rtc_enabled=args.rtc_enabled,
     ).serve_forever()
 
 

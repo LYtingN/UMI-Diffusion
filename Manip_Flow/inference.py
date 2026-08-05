@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import time
 from typing import Callable, Dict, Optional
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -63,6 +64,7 @@ class FlowPolicyInference:
         use_ema: bool = True,
         num_inference_steps: Optional[int] = None,
         tx_robot1_robot0: Optional[np.ndarray] = None,
+        rtc_enabled: bool = True,
     ) -> None:
         import dill
         import hydra
@@ -102,6 +104,13 @@ class FlowPolicyInference:
         dataset_frequency = float(cfg.task.dataset_frequency)
         action_step = int(self.shape_meta["action"]["down_sample_steps"])
         self.action_fps = dataset_frequency / action_step
+        self.rtc_enabled = bool(rtc_enabled)
+        if self.rtc_enabled:
+            from Manip_Flow.rtc_relative_action import RTCInferenceState
+
+            self._rtc_state = RTCInferenceState(self.action_fps)
+        else:
+            self._rtc_state = None
 
     def frames_at_target_fps(self, dp_fps: float, target_fps: float = 30.0) -> int:
         """Planner frames one chunk yields after dp_adapter resampling."""
@@ -184,10 +193,39 @@ class FlowPolicyInference:
             .unsqueeze(0)
             .to(self.device, dtype=self.policy.dtype),
         )
+        rtc_inputs = (
+            None
+            if self._rtc_state is None
+            else self._rtc_state.prepare(env_obs, start)
+        )
+        rtc_prefix = None
+        rtc_inference_delay = 0
+        if rtc_inputs is not None:
+            rtc_inference_delay = rtc_inputs.inference_delay
+            if rtc_inputs.prefix is not None:
+                rtc_prefix = torch.from_numpy(
+                    np.ascontiguousarray(rtc_inputs.prefix)
+                ).unsqueeze(0).to(
+                    self.device,
+                    dtype=self.policy.dtype,
+                )
+        inference_started = time.perf_counter()
         with torch.no_grad():
-            result = self.policy.predict_action(obs_dict, None)
+            result = self.policy.predict_action(
+                obs_dict,
+                rtc_action_prefix=rtc_prefix,
+                rtc_inference_delay=rtc_inference_delay,
+            )
+        inference_latency_s = time.perf_counter() - inference_started
         action = result["action"][0].detach().to("cpu").numpy()
         assert action.shape == (self.action_horizon, self.action_dim)
+        if self._rtc_state is not None and rtc_inputs is not None:
+            self._rtc_state.complete(
+                action,
+                start,
+                rtc_inputs.current_bases,
+                inference_latency_s,
+            )
         return action
 
     def make_dp_infer_fn(

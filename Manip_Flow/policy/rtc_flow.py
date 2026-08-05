@@ -20,7 +20,6 @@ class FlowSamplingConfig(NamedTuple):
     execution_horizon: int
     max_guidance_weight: float
     prefix_schedule: str
-    latched_channels: tuple[int, ...]
 
 
 def rtc_prefix_weights(
@@ -62,35 +61,6 @@ def rtc_prefix_weights(
             torch.zeros(total_horizon - end, device=device, dtype=dtype),
         )
     )
-
-
-def rtc_action_prefix_weights(
-    *,
-    inference_delay: int,
-    execution_horizon: int,
-    prefix_horizon: int,
-    total_horizon: int,
-    action_dim: int,
-    latched_channels: tuple[int, ...],
-    schedule: str,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> torch.Tensor:
-    if not 0 <= prefix_horizon <= total_horizon or action_dim < 1:
-        raise RTCConfigError("RTC prefix horizon or action dimension is invalid")
-    if any(channel < 0 or channel >= action_dim for channel in latched_channels):
-        raise RTCConfigError("RTC latched channel is outside the action dimension")
-    pose_weights = rtc_prefix_weights(
-        inference_delay=inference_delay,
-        execution_horizon=execution_horizon,
-        total_horizon=total_horizon,
-        schedule=schedule,
-        device=device,
-        dtype=dtype,
-    )
-    weights = pose_weights[:, None].repeat(1, action_dim)
-    weights[:prefix_horizon, list(latched_channels)] = 1.0
-    return weights
 
 
 def sample_flow_time(
@@ -172,24 +142,17 @@ def flow_euler_sample(
         )
         guided_prefix = torch.zeros_like(condition_data)
         guided_prefix[:, :prefix_horizon] = rtc_action_prefix[:, :prefix_horizon]
-        weights = rtc_action_prefix_weights(
+        weights = rtc_prefix_weights(
             inference_delay=rtc_inference_delay,
             execution_horizon=min(
                 config.execution_horizon,
                 prefix_horizon,
             ),
-            prefix_horizon=prefix_horizon,
             total_horizon=config.action_horizon,
-            action_dim=condition_data.shape[-1],
-            latched_channels=config.latched_channels,
             schedule=config.prefix_schedule,
             device=condition_data.device,
             dtype=condition_data.dtype,
-        ).unsqueeze(0)
-        latch_mask = torch.zeros_like(condition_mask)
-        latch_mask[:, :prefix_horizon, list(config.latched_channels)] = True
-        condition_data = torch.where(latch_mask, guided_prefix, condition_data)
-        condition_mask = condition_mask | latch_mask
+        ).view(1, config.action_horizon, 1)
     for index in range(config.inference_steps):
         time = times[index]
         pinned = (1.0 - time) * initial + time * condition_data
