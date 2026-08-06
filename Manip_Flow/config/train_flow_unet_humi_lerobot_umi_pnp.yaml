@@ -11,12 +11,12 @@ exp_name: "humi_unet_dinov3_dual_100demos"
 
 task:
   dataset_frequency: 30.0
-  # 10 Hz policy cadence. Horizon 24 spans 2.3 s and remains long enough for
-  # the real deploy's 16-frame async action lead plus the 50-frame Prior window.
+  # 10 Hz policy cadence. Horizon 40 spans 3.9 s and covers the H8/F32/P2
+  # Motion Prior's 104-frame condition window after resampling to 30 Hz.
   obs_down_sample_steps: 3
   low_dim_obs_horizon: 3
   img_obs_horizon: 1
-  action_horizon: 24
+  action_horizon: 40
   dataset_path: ${oc.env:UMI_PNP_DATASET_PATH}
   dataset:
     _target_: Manip_Flow.dataset.lerobot_umi_dataset.LeRobotUmiDataset
@@ -64,7 +64,7 @@ policy:
   logit_normal_std: 1.0
   train_flow_n_samples: 1
   obs_as_global_cond: True
-  rtc_execution_horizon: 12
+  rtc_execution_horizon: 20
   rtc_max_guidance_weight: 5.0
   rtc_prefix_schedule: exp
 

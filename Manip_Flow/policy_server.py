@@ -22,6 +22,7 @@ it decoded. See gripper_obs_provider.py / inference.py docstrings.
 Usage:
     python -m Manip_Flow.policy_server --ckpt <policy.ckpt> --device cuda:0 \
         --port 5570
+(RTC is enabled by default; use ``--no-rtc`` only for A/B diagnostics.)
 (run from the UMI-Diffusion repo root, or with it on PYTHONPATH.)
 """
 
@@ -134,13 +135,15 @@ class DPPolicyServer:
         mtype = msg.get("type")
         if mtype == "ping":
             return dp_wire.encode_pong(
-                shape_meta=self.infer.shape_meta,
-                action_horizon=self.infer.action_horizon,
-                action_dim=self.infer.action_dim,
-                obs_pose_repr=self.infer.obs_pose_repr,
-                action_pose_repr=self.infer.action_pose_repr,
-                action_fps=self.infer.action_fps,
-                rtc_enabled=self.infer.rtc_enabled,
+                dp_wire.DPPongMetadata(
+                    shape_meta=self.infer.shape_meta,
+                    action_horizon=self.infer.action_horizon,
+                    action_dim=self.infer.action_dim,
+                    obs_pose_repr=self.infer.obs_pose_repr,
+                    action_pose_repr=self.infer.action_pose_repr,
+                    action_fps=self.infer.action_fps,
+                    rtc_enabled=self.infer.rtc_enabled,
+                )
             )
         if mtype == "predict":
             req_id, cameras, lowdim, start, _win = dp_wire.decode_predict_request(buf)

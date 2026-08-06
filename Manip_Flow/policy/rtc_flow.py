@@ -1,3 +1,11 @@
+"""LeRobot RTC soft-prefix guidance adapted to forward-time rectified flow.
+
+The guidance and EXP/LINEAR schedules follow Hugging Face LeRobot's
+``RTCProcessor`` at commit 64b23178d5348609c266250d3e1f511eba4c33ff. This
+policy integrates noise-to-data from t=0 to t=1, so its equivalent clean-action
+estimate is ``x_t + (1 - t) v_t``. No action channel is hard-latched by RTC.
+"""
+
 from __future__ import annotations
 
 from typing import Callable, NamedTuple

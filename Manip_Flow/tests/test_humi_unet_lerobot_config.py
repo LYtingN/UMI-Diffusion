@@ -62,9 +62,9 @@ def test_humi_unet_config_matches_30hz_lerobot_temporal_contract() -> None:
     assert config.task.dataset_frequency / config.task.obs_down_sample_steps == 10.0
     assert config.task.img_obs_horizon == 1
     assert config.task.low_dim_obs_horizon == 3
-    assert config.shape_meta.action.horizon == 24
+    assert config.shape_meta.action.horizon == 40
     assert config.shape_meta.action.down_sample_steps == 3
-    assert config.policy.rtc_execution_horizon == 12
+    assert config.policy.rtc_execution_horizon == 20
     assert config.policy.rtc_max_guidance_weight == 5.0
     assert config.policy.rtc_prefix_schedule == "exp"
 

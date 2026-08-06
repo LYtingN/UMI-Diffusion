@@ -19,6 +19,13 @@ class RTCInputs(NamedTuple):
     current_bases: np.ndarray
 
 
+class _RTCChunk(NamedTuple):
+    action: np.ndarray
+    bases: np.ndarray
+    start: int
+    latency_s: float
+
+
 class RTCInferenceState:
     def __init__(self, action_fps: float, target_fps: float = 30.0) -> None:
         if action_fps <= 0.0 or target_fps <= 0.0:
@@ -28,10 +35,8 @@ class RTCInferenceState:
             )
         self._action_fps = action_fps
         self._target_fps = target_fps
-        self._previous_action: np.ndarray | None = None
-        self._previous_bases: np.ndarray | None = None
-        self._previous_start: int | None = None
-        self._last_latency_s = 0.0
+        self._latest: _RTCChunk | None = None
+        self._anchor: _RTCChunk | None = None
 
     def prepare(
         self,
@@ -39,27 +44,32 @@ class RTCInferenceState:
         start: int,
     ) -> RTCInputs:
         current_bases = eef_pose_matrices(env_obs)
-        if (
-            self._previous_action is None
-            or self._previous_bases is None
-            or self._previous_start is None
-            or start <= self._previous_start
-        ):
+        latest = self._latest
+        if latest is not None and start < latest.start:
+            self._latest = None
+            self._anchor = None
+            latest = None
+        if latest is None:
+            return RTCInputs(None, 0, current_bases)
+        if start > latest.start:
+            self._anchor = latest
+        anchor = self._anchor
+        if anchor is None:
             return RTCInputs(None, 0, current_bases)
         shift_float = (
-            (start - self._previous_start)
+            (start - anchor.start)
             * self._action_fps
             / self._target_fps
         )
         shift_tokens = int(round(shift_float))
         prefix = reanchor_relative_action_prefix(
-            self._previous_action,
-            self._previous_bases,
+            anchor.action,
+            anchor.bases,
             current_bases,
             shift_tokens=shift_tokens,
         )
         inference_delay = int(
-            math.ceil(self._last_latency_s * self._action_fps)
+            math.ceil(anchor.latency_s * self._action_fps)
         )
         return RTCInputs(prefix, inference_delay, current_bases)
 
@@ -70,13 +80,12 @@ class RTCInferenceState:
         current_bases: np.ndarray,
         latency_s: float,
     ) -> None:
-        self._previous_action = np.asarray(action, dtype=np.float32).copy()
-        self._previous_bases = np.asarray(
-            current_bases,
-            dtype=np.float64,
-        ).copy()
-        self._previous_start = int(start)
-        self._last_latency_s = max(0.0, float(latency_s))
+        self._latest = _RTCChunk(
+            action=np.asarray(action, dtype=np.float32).copy(),
+            bases=np.asarray(current_bases, dtype=np.float64).copy(),
+            start=int(start),
+            latency_s=max(0.0, float(latency_s)),
+        )
 
 
 def eef_pose_matrices(env_obs: dict[str, np.ndarray]) -> np.ndarray:

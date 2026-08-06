@@ -122,6 +122,37 @@ def test_rtc_state_accepts_fractional_planner_to_policy_stride() -> None:
     assert second.prefix.shape == (29, 20)
 
 
+def test_rtc_state_reuses_previous_boundary_during_same_start_inference() -> None:
+    # Given: start 16 has one candidate guided by the completed start-0 chunk.
+    state = RTCInferenceState(action_fps=10.0, target_fps=30.0)
+    env_obs = {}
+    for arm in range(2):
+        env_obs[f"robot{arm}_eef_pos"] = np.zeros((1, 3))
+        env_obs[f"robot{arm}_eef_rot_axis_angle"] = np.zeros((1, 3))
+    start_zero_action = np.zeros((40, 20), dtype=np.float32)
+    start_zero_action[:, (3, 7, 13, 17)] = 1.0
+    start_zero_action[:, (0, 10)] = 1.0
+    first = state.prepare(env_obs, start=0)
+    state.complete(start_zero_action, 0, first.current_bases, latency_s=0.08)
+    start_sixteen = state.prepare(env_obs, start=16)
+    start_sixteen_action = start_zero_action.copy()
+    start_sixteen_action[:, (0, 10)] = 2.0
+    state.complete(
+        start_sixteen_action,
+        16,
+        start_sixteen.current_bases,
+        latency_s=0.07,
+    )
+
+    # When: the 10 Hz producer infers again at the same planner boundary.
+    repeated = state.prepare(env_obs, start=16)
+
+    # Then: RTC remains pinned to start 0 instead of silently turning off.
+    assert repeated.prefix is not None
+    assert repeated.prefix.shape == (35, 20)
+    np.testing.assert_allclose(repeated.prefix[:, (0, 10)], 1.0)
+
+
 def test_official_rtc_does_not_hard_latch_tail_channels() -> None:
     # Given: old task progress lies beyond the official soft execution horizon.
     condition = torch.zeros((1, 4, 4), dtype=torch.float32)

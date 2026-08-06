@@ -78,13 +78,15 @@ class MockDPPolicyServer:
         mtype = msg.get("type")
         if mtype == "ping":
             return dp_wire.encode_pong(
-                self.shape_meta,
-                self.action_horizon,
-                self.action_dim,
-                "relative",
-                "relative",
-                self.action_fps,
-                False,
+                dp_wire.DPPongMetadata(
+                    shape_meta=self.shape_meta,
+                    action_horizon=self.action_horizon,
+                    action_dim=self.action_dim,
+                    obs_pose_repr="relative",
+                    action_pose_repr="relative",
+                    action_fps=self.action_fps,
+                    rtc_enabled=False,
+                )
             )
         if mtype == "predict":
             req_id, _cams, _low, _s, _w = dp_wire.decode_predict_request(buf)
