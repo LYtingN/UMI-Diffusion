@@ -31,7 +31,7 @@ log_folder: "logs"
 tasks:
   - name: flow_umi_pnp
     type: torch_trainer.train
-    run_name: flow_humi_unet_shared_dino_pnp_table
+    run_name: flow_humi_unet_dino_drawer_a40
     # 由平台启动器托管分布式(自动注入 RANK/WORLD_SIZE/MASTER_ADDR 铺满全部 GPU,
     # 含多机);workspace 内部用 accelerate.Accelerator() 自动读取,无需手写 accelerate launch
     entry_module: Manip_Flow/scripts/train_flow_umi.py
@@ -45,12 +45,31 @@ tasks:
       # val_ratio 在合并后的 episodes 上统一划分)。Hydra list override 语法。
       - "task.dataset_path=[/data/nas_ray/home/eason.er/datasets/drawer0805,/data/nas_ray/home/eason.er/datasets/drawer]"
       - "logging.mode=offline"
-      - "hydra.run.dir=/data/nas_ray/home/eason.er/ckpt/flow_humi_unet_shared_dino_drawer"
+      # 新目录:resume=False,若沿用 flow_humi_unet_shared_dino_drawer 会把 400-epoch
+      # 老 run 的 21 个 ckpt 和新 run 的混在一起(topk_manager 只记内存里的列表,
+      # 不认磁盘上的旧文件),logs.json.txt 也会继续往老文件后面追加。
+      - "hydra.run.dir=/data/nas_ray/home/eason.er/ckpt/flow_humi_unet_dino_drawer_a40"
       # 保守:16 卡 x 16 = 全局 batch 256(默认 32/卡会到 512,对 151 episodes 偏大),
       # lr 保持 config 默认 3e-4
       - "dataloader.batch_size=16"
       - "val_dataloader.batch_size=16"
-      - "training.num_epochs=400"
+
+      # ===== 实验 A(基线):18.3M UNet(down_dims 保持 [96,192,384] 默认)=====
+      # 上一个 400-epoch run 的实测:best val_loss 0.0502 @ epoch 10,之后单调变差
+      # (epoch 245: train 0.0145 / val 0.1295)。也就是 390 个 epoch 全在过拟合,
+      # 而且 epoch 10 时 warmup(2000 步 = 7.1 epoch)刚结束、lr 还在峰值的 99.8%,
+      # 那个"最好"的 ckpt 根本没退过火。所以这里把预算压到 40 epoch:
+      #   - cosine 在 40 epoch(约 11.3k 步)内真正走完 → 末期 lr 才降下来
+      #   - warmup 500 步(1.8 epoch)而不是 2000 步,否则 warmup 吃掉 18% 的训练
+      #   - checkpoint/val 每 2 epoch 一次,最优点在 8~14 之间不会被 10 的粒度漏掉
+      #     (val_every 必须整除 checkpoint_every,否则 topk 的 val_loss 拿不到)
+      - "training.num_epochs=40"
+      - "training.lr_warmup_steps=500"
+      - "training.checkpoint_every=2"
+      - "training.val_every=2"
+      # 40/2 = 20 次 checkpoint 机会,每个 ckpt 1.54 GB;只留最好的 10 个(~15 GB),
+      # 完整 val 曲线在 logs.json.txt 里,不需要靠 ckpt 保留
+      - "checkpoint.topk.k=10"
 
 os_env_vars:
   GH_PAT: "REPLACE_WITH_GITHUB_PAT"

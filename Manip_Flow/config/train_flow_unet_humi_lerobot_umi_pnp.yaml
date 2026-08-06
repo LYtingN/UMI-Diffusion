@@ -137,8 +137,9 @@ checkpoint:
   topk:
     # select on val_loss, not train_loss: with ~190 episodes train_loss keeps
     # dropping while the policy overfits, so topk-by-train_loss would retain
-    # exactly the most overfit checkpoints. Requires val_every to divide
-    # checkpoint_every (5 | 10) so val_loss is present on checkpoint epochs.
+    # exactly the most overfit checkpoints. INVARIANT: val_every must divide
+    # checkpoint_every, otherwise val_loss is missing on checkpoint epochs and
+    # topk is skipped (see the guard in the workspace).
     monitor_key: val_loss
     mode: min
     k: 20
