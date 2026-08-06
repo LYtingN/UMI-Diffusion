@@ -29,9 +29,9 @@ py_paths: ["."]
 log_folder: "logs"
 
 tasks:
-  - name: flow_umi_pnp
+  - name: flow_umi_shelf0730
     type: torch_trainer.train
-    run_name: flow_humi_unet_dinov3_dual_100demos
+    run_name: flow_humi_unet_shared_dino_shelf0730
     # 由平台启动器托管分布式(自动注入 RANK/WORLD_SIZE/MASTER_ADDR 铺满全部 GPU,
     # 含多机);workspace 内部用 accelerate.Accelerator() 自动读取,无需手写 accelerate launch
     entry_module: Manip_Flow/scripts/train_flow_umi.py
@@ -42,19 +42,21 @@ tasks:
       # =${task.dataset_path} 插值引用顶层。train_flow_umi.py 里 OmegaConf.resolve(cfg) 会立即
       # 求值整棵树,故必须覆盖顶层(否则读不到 env 变量直接 KeyError 崩溃);覆盖顶层会经插值
       # 传导到嵌套 dataset。os_env_vars 里另设 UMI_PNP_DATASET_PATH 做兜底。
-      - "task.dataset_path=/data/nas_ray/home/eason.er/datasets/drawer"
+      - "task.dataset_path=/data/nas_ray/home/eason.er/datasets/shelf0730"
       - "logging.mode=offline"
-      - "hydra.run.dir=data/outputs/flow_humi_unet_dinov3_dual_100demos"
-      - "dataloader.batch_size=8"
-      - "val_dataloader.batch_size=8"
-      - "training.num_epochs=100"
+      - "hydra.run.dir=data/outputs/flow_humi_unet_shared_dino_shelf0730"
+      # 保守:16 卡 x 16 = 全局 batch 256(默认 32/卡会到 512,对 98 episodes 偏大),
+      # lr 保持 config 默认 3e-4
+      - "dataloader.batch_size=16"
+      - "val_dataloader.batch_size=16"
+      - "training.num_epochs=300"
 
 os_env_vars:
   GH_PAT: "REPLACE_WITH_GITHUB_PAT"
   WANDB_MODE: "offline"
   # 兜底:config 顶层 task.dataset_path 默认读此 env(即便命令行覆盖漏掉也不会 KeyError)
-  UMI_PNP_DATASET_PATH: "/data/nas_ray/home/eason.er/datasets/drawer"
-  # DINOv3 weights are preloaded in the shared NAS cache for offline workers.
+  UMI_PNP_DATASET_PATH: "/data/nas_ray/home/eason.er/datasets/shelf0730"
+  # DINOv2 权重预下载到 NAS 共享缓存,worker 离线读取(config 用 pretrained: True)
   HF_HOME: "/data/nas_ray/home/eason.er/hf_cache"
   HF_HUB_OFFLINE: "1"
   TRANSFORMERS_OFFLINE: "1"

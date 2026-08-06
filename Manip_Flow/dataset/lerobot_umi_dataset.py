@@ -37,7 +37,7 @@ the LeRobot dataset ROOT dir instead of a .zarr.zip. See
 """
 
 import os
-from typing import Optional
+from typing import List, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -126,22 +126,21 @@ def _read_video_frames(mp4_path: str, expected_len: int, transform) -> np.ndarra
     return arr
 
 
-def build_umi_replay_buffer_from_lerobot(
-    dataset_path: str,
+def _append_lerobot_root_to_buffer(
+    root: str,
+    replay_buffer: ReplayBuffer,
     out_res=(224, 224),
     max_episodes: Optional[int] = None,
     verbose: bool = True,
-) -> ReplayBuffer:
-    """Read a LeRobot v2.1 UMI dataset dir into an in-memory UMI ReplayBuffer.
+    src_tag: str = "",
+) -> None:
+    """Append every episode of one LeRobot v2.1 dir into ``replay_buffer``.
 
-    Args:
-        dataset_path: LeRobot dataset ROOT (the dir holding data/ meta/ videos/).
-        out_res: (W, H) target for camera frames (UMI shape_meta is 224x224).
-        max_episodes: cap episodes (debug/smoke); None = all.
+    Kept separate from the public entry point so several roots can be merged
+    into a single shared ReplayBuffer (see ``build_umi_replay_buffer_from_lerobot``).
     """
     import json
 
-    root = dataset_path
     info = json.load(open(os.path.join(root, "meta", "info.json")))
     data_tmpl = info["data_path"]      # data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet
     video_tmpl = info["video_path"]    # videos/chunk-{...}/{video_key}/episode_{...}.mp4
@@ -150,7 +149,6 @@ def build_umi_replay_buffer_from_lerobot(
     if max_episodes is not None:
         n_ep = min(n_ep, max_episodes)
 
-    replay_buffer = ReplayBuffer.create_empty_numpy()
     img_tf = None  # built lazily once we know the source resolution
 
     for ep in range(n_ep):
@@ -184,7 +182,34 @@ def build_umi_replay_buffer_from_lerobot(
 
         replay_buffer.add_episode(episode, compressors=None)
         if verbose:
-            print(f"[lerobot->umi] episode {ep + 1}/{n_ep}: {T} frames", flush=True)
+            print(f"[lerobot->umi]{src_tag} episode {ep + 1}/{n_ep}: {T} frames", flush=True)
+
+
+def build_umi_replay_buffer_from_lerobot(
+    dataset_path: Union[str, List[str]],
+    out_res=(224, 224),
+    max_episodes: Optional[int] = None,
+    verbose: bool = True,
+) -> ReplayBuffer:
+    """Read one or more LeRobot v2.1 UMI dataset dirs into a single ReplayBuffer.
+
+    Args:
+        dataset_path: a LeRobot dataset ROOT (the dir holding data/ meta/
+            videos/), OR a list of such roots. Multiple roots are concatenated
+            episode-by-episode into one buffer, so the downstream sampler /
+            normalizer / train-val split treat them as one pooled dataset.
+        out_res: (W, H) target for camera frames (UMI shape_meta is 224x224).
+        max_episodes: cap episodes PER root (debug/smoke); None = all.
+    """
+    roots = [dataset_path] if isinstance(dataset_path, str) else list(dataset_path)
+
+    replay_buffer = ReplayBuffer.create_empty_numpy()
+    for i, root in enumerate(roots):
+        tag = f"[{i + 1}/{len(roots)} {os.path.basename(os.path.normpath(root))}]" if len(roots) > 1 else ""
+        _append_lerobot_root_to_buffer(
+            root, replay_buffer, out_res=out_res,
+            max_episodes=max_episodes, verbose=verbose, src_tag=tag,
+        )
 
     return replay_buffer
 
@@ -201,7 +226,7 @@ class LeRobotUmiDataset(UmiDataset):
     def __init__(
         self,
         shape_meta: dict,
-        dataset_path: str,
+        dataset_path: Union[str, List[str]],       # one LeRobot root, or a list to pool
         cache_dir: Optional[str] = None,          # accepted & ignored (kept in-memory)
         pose_repr: dict = {},
         action_padding: bool = False,

@@ -1,0 +1,61 @@
+config_version: 1
+cluster: aliyun_h100
+num_gpus: 16
+image: "ai-base:ubuntu22.04-sim5.0.0-lab_MD2.2.1-ray2.52.0-cu12.8_devel-v1.4"
+
+git_workspace:
+  token: GH_PAT
+  repos:
+    - repo_url: https://github.com/LYtingN/UMI-Diffusion.git
+      commit_sha: main
+
+pip_packages:
+  - dill
+  - zarr
+  - numcodecs
+  - timm
+  - diffusers
+  - accelerate
+  - wandb>=0.18.0
+  - imagecodecs
+  # LeRobot loader reads parquet proprio + mp4 video directly
+  - pandas
+  - imageio[ffmpeg]
+pip_directories: []
+py_modules: []
+# repo 根下直接是 Manip_Flow/(train_flow_umi.py 里 _REPO_ROOT=parents[2] 已自行
+# 将 repo 根插入 sys.path 以解析 Manip_Flow.* 的 hydra target),故 py_paths 指向 repo 根
+py_paths: ["."]
+log_folder: "logs"
+
+tasks:
+  - name: flow_umi_pnp
+    type: torch_trainer.train
+    run_name: flow_humi_unet_shared_dino_pnp_table
+    # 由平台启动器托管分布式(自动注入 RANK/WORLD_SIZE/MASTER_ADDR 铺满全部 GPU,
+    # 含多机);workspace 内部用 accelerate.Accelerator() 自动读取,无需手写 accelerate launch
+    entry_module: Manip_Flow/scripts/train_flow_umi.py
+    args:
+      - "--config-name"
+      - "train_flow_unet_humi_lerobot_umi_pnp"
+
+      - "policy.obs_encoder.share_rgb_model=False"
+
+      # 两组数据集合并为一个 pooled 数据集(episodes 拼接进同一个 ReplayBuffer,
+      # val_ratio 在合并后的 episodes 上统一划分)。Hydra list override 语法。
+      - "task.dataset_path=[/data/nas_ray/home/eason.er/datasets/drawer0805,/data/nas_ray/home/eason.er/datasets/drawer]"
+      - "logging.mode=offline"
+      - "hydra.run.dir=/data/nas_ray/home/eason.er/ckpt/flow_humi_unet_shared_dino_pnp_table"
+      # 保守:16 卡 x 16 = 全局 batch 256(默认 32/卡会到 512,对 151 episodes 偏大),
+      # lr 保持 config 默认 3e-4
+      - "dataloader.batch_size=16"
+      - "val_dataloader.batch_size=16"
+      - "training.num_epochs=400"
+
+os_env_vars:
+  GH_PAT: "REPLACE_WITH_GITHUB_PAT"
+  WANDB_MODE: "offline"
+  UMI_PNP_DATASET_PATH: "/data/nas_ray/home/eason.er/datasets/drawer"
+  HF_HOME: "/data/nas_ray/home/eason.er/hf_cache"
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"

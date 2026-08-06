@@ -1,0 +1,62 @@
+config_version: 1
+cluster: aliyun_h100
+num_gpus: 16
+image: "ai-base:ubuntu22.04-sim5.0.0-lab_MD2.2.1-ray2.52.0-cu12.8_devel-v1.4"
+
+git_workspace:
+  token: GH_PAT
+  repos:
+    - repo_url: https://github.com/LYtingN/UMI-Diffusion.git
+      commit_sha: main
+
+pip_packages:
+  - dill
+  - zarr
+  - numcodecs
+  - timm
+  - diffusers
+  - accelerate
+  - wandb>=0.18.0
+  - imagecodecs
+  # LeRobot loader reads parquet proprio + mp4 video directly
+  - pandas
+  - imageio[ffmpeg]
+pip_directories: []
+py_modules: []
+# repo 根下直接是 Manip_Flow/(train_flow_umi.py 里 _REPO_ROOT=parents[2] 已自行
+# 将 repo 根插入 sys.path 以解析 Manip_Flow.* 的 hydra target),故 py_paths 指向 repo 根
+py_paths: ["."]
+log_folder: "logs"
+
+tasks:
+  - name: flow_umi_walk_pnp_bottle
+    type: torch_trainer.train
+    run_name: flow_humi_unet_shared_dino_walk_pnp_bottle
+    # 由平台启动器托管分布式(自动注入 RANK/WORLD_SIZE/MASTER_ADDR 铺满全部 GPU,
+    # 含多机);workspace 内部用 accelerate.Accelerator() 自动读取,无需手写 accelerate launch
+    entry_module: Manip_Flow/scripts/train_flow_umi.py
+    args:
+      - "--config-name"
+      - "train_flow_unet_humi_lerobot_umi_pnp"
+      # 顶层 task.dataset_path=${oc.env:UMI_PNP_DATASET_PATH},嵌套 task.dataset.dataset_path
+      # =${task.dataset_path} 插值引用顶层。train_flow_umi.py 里 OmegaConf.resolve(cfg) 会立即
+      # 求值整棵树,故必须覆盖顶层(否则读不到 env 变量直接 KeyError 崩溃);覆盖顶层会经插值
+      # 传导到嵌套 dataset。os_env_vars 里另设 UMI_PNP_DATASET_PATH 做兜底。
+      - "task.dataset_path=/data/nas_ray/home/eason.er/datasets/walk-pnp-bottle"
+      - "logging.mode=offline"
+      - "hydra.run.dir=data/outputs/flow_humi_unet_shared_dino_walk_pnp_bottle"
+      # 保守:16 卡 x 16 = 全局 batch 256(默认 32/卡会到 512,对 100 episodes 偏大),
+      # lr 保持 config 默认 3e-4
+      - "dataloader.batch_size=16"
+      - "val_dataloader.batch_size=16"
+      - "training.num_epochs=400"
+
+os_env_vars:
+  GH_PAT: "REPLACE_WITH_GITHUB_PAT"
+  WANDB_MODE: "offline"
+  # 兜底:config 顶层 task.dataset_path 默认读此 env(即便命令行覆盖漏掉也不会 KeyError)
+  UMI_PNP_DATASET_PATH: "/data/nas_ray/home/eason.er/datasets/walk-pnp-bottle"
+  # DINOv2 权重预下载到 NAS 共享缓存,worker 离线读取(config 用 pretrained: True)
+  HF_HOME: "/data/nas_ray/home/eason.er/hf_cache"
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
