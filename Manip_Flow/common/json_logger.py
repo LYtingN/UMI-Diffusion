@@ -37,8 +37,36 @@ def read_json_log(path: str,
     df = pd.read_json(json_buf, **kwargs)
     return df
 
+class NullJsonLogger:
+    """No-op stand-in for ``JsonLogger`` on non-zero ranks.
+
+    Every rank shares ``output_dir`` (typically NAS), so if all of them append to
+    the same ``logs.json.txt`` their line-buffered writes interleave mid-record and
+    the file becomes unparseable -- which then makes the NEXT run of the same
+    ``hydra.run.dir`` die inside ``JsonLogger.start()`` on ``json.loads``.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.last_log = None
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+    def log(self, data: dict):
+        self.last_log = data
+
+
 class JsonLogger:
-    def __init__(self, path: str, 
+    def __init__(self, path: str,
             filter_fn: Optional[Callable[[str,Any],bool]]=None):
         if filter_fn is None:
             filter_fn = lambda k,v: isinstance(v, numbers.Number)
@@ -81,8 +109,16 @@ class JsonLogger:
         if last_line_start < last_line_end:
             # has last line of json
             last_line = file.readline()
-            self.last_log = json.loads(last_line)
-        
+            try:
+                self.last_log = json.loads(last_line)
+            except json.JSONDecodeError:
+                # A pre-existing log can be truncated mid-write or (from older
+                # runs) interleaved by several ranks. last_log is advisory only,
+                # so degrade instead of killing a job that hasn't trained a step.
+                print(f'[JsonLogger] ignoring unparseable last line of {self.path}')
+                self.last_log = None
+
+
         # remove the last incomplete line
         file.seek(last_line_end)
         file.truncate()

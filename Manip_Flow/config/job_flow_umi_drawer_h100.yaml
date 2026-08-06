@@ -45,7 +45,7 @@ tasks:
       # val_ratio 在合并后的 episodes 上统一划分)。Hydra list override 语法。
       - "task.dataset_path=[/data/nas_ray/home/eason.er/datasets/drawer0805,/data/nas_ray/home/eason.er/datasets/drawer]"
       - "logging.mode=offline"
-      - "hydra.run.dir=/data/nas_ray/home/eason.er/ckpt/flow_humi_unet_shared_dino_pnp_table"
+      - "hydra.run.dir=/data/nas_ray/home/eason.er/ckpt/flow_humi_unet_shared_dino_drawer"
       # 保守:16 卡 x 16 = 全局 batch 256(默认 32/卡会到 512,对 151 episodes 偏大),
       # lr 保持 config 默认 3e-4
       - "dataloader.batch_size=16"

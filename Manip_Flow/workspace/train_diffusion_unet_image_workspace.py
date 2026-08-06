@@ -25,7 +25,7 @@ from Manip_Flow.policy.diffusion_unet_image_policy import DiffusionUnetImagePoli
 from Manip_Flow.dataset.base_dataset import BaseImageDataset, BaseDataset
 from Manip_Flow.env_runner.base_image_runner import BaseImageRunner
 from Manip_Flow.common.checkpoint_util import TopKCheckpointManager
-from Manip_Flow.common.json_logger import JsonLogger
+from Manip_Flow.common.json_logger import JsonLogger, NullJsonLogger
 from Manip_Flow.common.pytorch_util import dict_apply, optimizer_to
 from Manip_Flow.model.diffusion.ema_model import EMAModel
 from Manip_Flow.model.common.lr_scheduler import get_scheduler
@@ -219,8 +219,13 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             cfg.training.sample_every = 1
 
         # training loop
+        # Only rank 0 may write logs.json.txt: all ranks share output_dir, and
+        # concurrent line-buffered appends interleave mid-record, corrupting the
+        # file so that the next run crashes in JsonLogger.start()/json.loads.
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
-        with JsonLogger(log_path) as json_logger:
+        json_logger_ctx = JsonLogger(log_path) if accelerator.is_main_process \
+            else NullJsonLogger()
+        with json_logger_ctx as json_logger:
             for local_epoch_idx in range(cfg.training.num_epochs):
                 self.model.train()
 
