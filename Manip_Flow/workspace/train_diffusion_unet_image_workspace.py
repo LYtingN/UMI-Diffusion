@@ -57,18 +57,32 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         # self.optimizer = hydra.utils.instantiate(
         #     cfg.optimizer, params=self.model.parameters())
 
-        obs_encorder_lr = cfg.optimizer.lr
+        # Split the obs_encoder into the PRETRAINED backbone (obs_encoder.key_model_map,
+        # i.e. the timm ViT/ResNet weights) and the feature-aggregation heads
+        # (attention_pool_2d / spatial_embedding / aggregation_transformer / attention),
+        # which are randomly initialized. Only the former wants the reduced lr --
+        # giving a from-scratch head 0.1x lr just makes it converge slowly.
+        backbone_lr = cfg.optimizer.lr
         if cfg.policy.obs_encoder.pretrained:
-            obs_encorder_lr *= 0.1
-            print('==> reduce pretrained obs_encorder\'s lr')
-        obs_encorder_params = list()
-        for param in self.model.obs_encoder.parameters():
-            if param.requires_grad:
-                obs_encorder_params.append(param)
-        print(f'obs_encorder params: {len(obs_encorder_params)}')
+            backbone_lr *= 0.1
+            print('==> reduce pretrained obs_encorder backbone lr')
+        obs_encoder_backbone_params = list()
+        obs_encoder_head_params = list()
+        for name, param in self.model.obs_encoder.named_parameters():
+            if not param.requires_grad:
+                continue
+            if name.startswith('key_model_map.'):
+                obs_encoder_backbone_params.append(param)
+            else:
+                obs_encoder_head_params.append(param)
+        print(f'obs_encorder backbone params: {len(obs_encoder_backbone_params)} '
+              f'@ lr {backbone_lr:g}')
+        print(f'obs_encorder head params: {len(obs_encoder_head_params)} '
+              f'@ lr {cfg.optimizer.lr:g}')
         param_groups = [
             {'params': self.model.model.parameters()},
-            {'params': obs_encorder_params, 'lr': obs_encorder_lr}
+            {'params': obs_encoder_backbone_params, 'lr': backbone_lr},
+            {'params': obs_encoder_head_params},
         ]
         # self.optimizer = hydra.utils.instantiate(
         #     cfg.optimizer, params=param_groups)
@@ -281,23 +295,41 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     step_log.update(runner_log)
 
                 # run validation
-                # if (self.epoch % cfg.training.val_every) == 0 and len(val_dataloader) > 0 and accelerator.is_main_process:
-                #     with torch.no_grad():
-                #         val_losses = list()
-                #         with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 
-                #                 leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
-                #             for batch_idx, batch in enumerate(tepoch):
-                #                 batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                #                 loss = self.model(batch)
-                #                 val_losses.append(loss)
-                #                 if (cfg.training.max_val_steps is not None) \
-                #                     and batch_idx >= (cfg.training.max_val_steps-1):
-                #                     break
-                #         if len(val_losses) > 0:
-                #             val_loss = torch.mean(torch.tensor(val_losses)).item()
-                #             # log epoch average validation loss
-                #             step_log['val_loss'] = val_loss
-                
+                # NOTE: val_dataloader went through accelerator.prepare, so it is
+                # SHARDED per rank -- every rank must iterate its own shard and the
+                # result be reduced, otherwise main-process-only validation would
+                # only ever see 1/world_size of the val episodes. Running the forward
+                # on all ranks also keeps DDP participation symmetric.
+                if (self.epoch % cfg.training.val_every) == 0 and len(val_dataloader) > 0:
+                    # `policy.eval()` above only touches ema_model when use_ema=True,
+                    # so put the trained model itself in eval explicitly -- otherwise
+                    # RandomCrop/ColorJitter stay active and val_loss is noise.
+                    # self.model.train() at the top of the next epoch restores mode.
+                    self.model.eval()
+                    with torch.no_grad():
+                        val_loss_sum = torch.zeros((), device=device)
+                        val_batches = torch.zeros((), device=device)
+                        with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}",
+                                leave=False, mininterval=cfg.training.tqdm_interval_sec,
+                                disable=not accelerator.is_main_process) as tepoch:
+                            for batch_idx, batch in enumerate(tepoch):
+                                batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                                loss = self.model(batch)
+                                val_loss_sum += loss.detach().float()
+                                val_batches += 1
+                                if (cfg.training.max_val_steps is not None) \
+                                    and batch_idx >= (cfg.training.max_val_steps-1):
+                                    break
+                        # weight by per-rank batch count: shards can be uneven
+                        stats = accelerator.gather(
+                            torch.stack([val_loss_sum, val_batches]).unsqueeze(0))
+                        total_loss = stats[:, 0].sum().item()
+                        total_batches = stats[:, 1].sum().item()
+                        if total_batches > 0:
+                            # log epoch average validation loss
+                            step_log['val_loss'] = total_loss / total_batches
+
+
                 def log_action_mse(step_log, category, pred_action, gt_action):
                     B, T, _ = pred_action.shape
                     pred_action = pred_action.view(B, T, -1, 10)
@@ -347,10 +379,19 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     # We can't copy the last checkpoint here
                     # since save_checkpoint uses threads.
                     # therefore at this point the file might have been empty!
-                    topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
+                    # topk monitors val_loss, which is absent if this epoch ran no
+                    # validation (val_every not dividing checkpoint_every, or an
+                    # empty val split). Skip topk instead of dying on a KeyError --
+                    # save_last_ckpt above has already persisted this epoch.
+                    if cfg.checkpoint.topk.monitor_key not in metric_dict:
+                        print(f"[topk] epoch {self.epoch}: no "
+                              f"'{cfg.checkpoint.topk.monitor_key}' in metrics, "
+                              f"skipping topk checkpoint")
+                    else:
+                        topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
 
-                    if topk_ckpt_path is not None:
-                        self.save_checkpoint(path=topk_ckpt_path)
+                        if topk_ckpt_path is not None:
+                            self.save_checkpoint(path=topk_ckpt_path)
 
                     # recover the DDP model
                     self.model = model_ddp

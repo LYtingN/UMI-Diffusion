@@ -135,10 +135,14 @@ logging:
 
 checkpoint:
   topk:
-    monitor_key: train_loss
+    # select on val_loss, not train_loss: with ~190 episodes train_loss keeps
+    # dropping while the policy overfits, so topk-by-train_loss would retain
+    # exactly the most overfit checkpoints. Requires val_every to divide
+    # checkpoint_every (5 | 10) so val_loss is present on checkpoint epochs.
+    monitor_key: val_loss
     mode: min
     k: 20
-    format_str: 'epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt'
+    format_str: 'epoch={epoch:04d}-val_loss={val_loss:.3f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False
 
