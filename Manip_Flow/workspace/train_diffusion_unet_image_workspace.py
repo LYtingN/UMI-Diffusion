@@ -335,14 +335,21 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                             step_log['val_loss'] = total_loss / total_batches
 
 
+                # NOTE: values MUST be python floats, not 0-dim tensors. JsonLogger's
+                # default filter_fn drops anything that is not a numbers.Number
+                # (json_logger.py:70-72), and torch.Tensor does not register with the
+                # numbers ABC -- so tensor-valued entries were silently discarded and
+                # never reached logs.json.txt (every run before 2026-08-07 logged only
+                # train_loss/val_loss/lr, despite sample_every firing on schedule).
                 def log_action_mse(step_log, category, pred_action, gt_action):
                     B, T, _ = pred_action.shape
                     pred_action = pred_action.view(B, T, -1, 10)
                     gt_action = gt_action.view(B, T, -1, 10)
-                    step_log[f'{category}_action_mse_error'] = torch.nn.functional.mse_loss(pred_action, gt_action)
-                    step_log[f'{category}_action_mse_error_pos'] = torch.nn.functional.mse_loss(pred_action[..., :3], gt_action[..., :3])
-                    step_log[f'{category}_action_mse_error_rot'] = torch.nn.functional.mse_loss(pred_action[..., 3:9], gt_action[..., 3:9])
-                    step_log[f'{category}_action_mse_error_width'] = torch.nn.functional.mse_loss(pred_action[..., 9], gt_action[..., 9])
+                    mse = torch.nn.functional.mse_loss
+                    step_log[f'{category}_action_mse_error'] = mse(pred_action, gt_action).item()
+                    step_log[f'{category}_action_mse_error_pos'] = mse(pred_action[..., :3], gt_action[..., :3]).item()
+                    step_log[f'{category}_action_mse_error_rot'] = mse(pred_action[..., 3:9], gt_action[..., 3:9]).item()
+                    step_log[f'{category}_action_mse_error_width'] = mse(pred_action[..., 9], gt_action[..., 9]).item()
                 # run diffusion sampling on a training batch
                 if (self.epoch % cfg.training.sample_every) == 0 and accelerator.is_main_process:
                     with torch.no_grad():
@@ -408,7 +415,19 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                 self.global_step += 1
                 self.epoch += 1
 
-        accelerator.end_training()
+        # Do NOT call accelerator.end_training() here. In accelerate >= 1.x it ends
+        # trackers AND calls PartialState().destroy_process_group(). Under Ray Train
+        # the controller then runs its own _shutdown_torch() ->
+        # dist.destroy_process_group(), which trips `assert pg is not None` and makes
+        # md_ai_kit mark an otherwise-COMPLETED run FAILED (2026-08-07,
+        # flow_humi_unet_dino_drawer_a40_ep12: all 12 epochs + all checkpoints
+        # written, then the job reported FAILED on teardown).
+        # Whoever created the process group should destroy it, so only do the
+        # tracker half of end_training() here.
+        accelerator.wait_for_everyone()
+        if accelerator.is_main_process:
+            for tracker in getattr(accelerator, 'trackers', []):
+                tracker.finish()
 
 @hydra.main(
     version_base=None,
