@@ -42,10 +42,22 @@ py_modules: []
 py_paths: ["."]
 log_folder: "logs"
 
+# 相对 job_flow_umi_drawer_h100.yaml 的唯一变化:num_epochs 40 -> 12。
+#
+# 依据(0807 那次 40-epoch run,ckpt/flow_humi_unet_dino_drawer_a40_0807):
+#   val_loss 在 epoch 10 见底 0.0481,之后单调上升到 epoch 38 的 0.0857(1.8x),
+#   而 lr 那时已退火到 4.3e-07 —— 退火没能抵消过拟合。train_loss 同期从
+#   0.0406 降到 0.0197,是纯记忆化。
+# 所以把 cosine 的总预算压到 12 epoch,让 lr 在 val 仍在下降的区间内退完,
+# 而不是在 val 已经变差的区间里继续退。这是单变量改动,便于和 0807 直接对比。
+#
+# 下一步的正交杠杆(本文件不动,留给后续 A/B):
+#   optimizer.weight_decay=1e-2       (当前 1e-6,基本等于关闭)
+#   policy.obs_encoder.finetune_last_n_blocks=0  (当前 1,完全冻结做对比)
 tasks:
   - name: flow_umi_pnp
     type: torch_trainer.train
-    run_name: flow_humi_unet_dino_drawer_a40
+    run_name: flow_humi_unet_dino_drawer_a40_ep12
     entry_module: Manip_Flow/scripts/train_flow_umi.py
     args:
       - "--config-name"
@@ -59,14 +71,15 @@ tasks:
       # 其余以 readonly mmap 打开,共享 page cache(≈6 GiB/节点)。
       - "task.dataset.cache_dir=/tmp/umi_zarr_cache"
       - "logging.mode=offline"
-      - "hydra.run.dir=/data/nas_ray/home/eason.er/ckpt/flow_humi_unet_dino_drawer_a40_0807"
+      - "hydra.run.dir=/data/nas_ray/home/eason.er/ckpt/flow_humi_unet_dino_drawer_a40_0807_ep12"
       - "dataloader.batch_size=16"
       - "val_dataloader.batch_size=16"
-      - "training.num_epochs=40"
+      - "training.num_epochs=12"
       - "training.lr_warmup_steps=500"
       - "training.checkpoint_every=2"
       - "training.val_every=2"
-      - "checkpoint.topk.k=10"
+      # 12 epochs / val_every=2 = 6 次验证,k=6 等于全留
+      - "checkpoint.topk.k=6"
 
 os_env_vars:
   GH_PAT: "REPLACE_WITH_GITHUB_PAT"

@@ -79,7 +79,10 @@ class UmiDataset(BaseDataset):
                                 )
                         print("Cache written to disk!")
                     except Exception as e:
-                        shutil.rmtree(cache_path)
+                        # ignore_errors: if the failure happened before the LMDB
+                        # was created (e.g. missing `lmdb` package), rmtree would
+                        # raise FileNotFoundError and mask the real cause.
+                        shutil.rmtree(cache_path, ignore_errors=True)
                         raise e
             
             # open read-only lmdb store

@@ -10,14 +10,27 @@ git_workspace:
       commit_sha: main
 
 pip_packages:
+  # numpy 必须钉在镜像 base env 自带的 1.26.0。不钉的话 imagecodecs 会解析到
+  # 2026.3.6(requires numpy>=2),把 numpy 2.x 装进 runtime_env 的 overlay venv
+  # 并遮蔽 base 的 1.26.0 —— 结果 torch/ray/hydra 从 base 加载(numpy/core),
+  # accelerate/imagecodecs 从 overlay 加载(numpy/_core),同一进程两套 numpy ABI。
+  # 钉住 numpy 后 pip 会自行挑兼容版本(实测可解析:accelerate 1.14.0 /
+  # diffusers 0.39.0 / timm 1.0.28 / dill 0.4.1)。
+  - numpy==1.26.0
   - dill
-  - zarr
-  - numcodecs
+  # zarr 必须 <3:replay_buffer.py / umi_dataset.py 用的是 zarr v2 的
+  # DirectoryStore / ZipStore / LMDBStore,zarr 3 已把它们移除
+  - zarr==2.18.7
+  - numcodecs==0.15.1
+  # zarr.LMDBStore 的后端(task.dataset.cache_dir 走的就是 LMDB);缺它会在
+  # 建缓存时 ModuleNotFoundError
+  - lmdb==2.3.0
   - timm
   - diffusers
   - accelerate
   - wandb>=0.18.0
-  - imagecodecs
+  # 2026.1.14 是最后一个还兼容 numpy 1.x 的版本,2026.3.6 起要求 numpy>=2
+  - imagecodecs==2026.1.14
   # LeRobot loader reads parquet proprio + mp4 video directly
   - pandas
   - imageio[ffmpeg]
