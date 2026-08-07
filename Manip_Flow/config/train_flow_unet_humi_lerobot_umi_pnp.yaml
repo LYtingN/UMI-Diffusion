@@ -123,6 +123,23 @@ training:
   max_train_steps: null
   max_val_steps: null
   tqdm_interval_sec: 1.0
+  # val_loss alone cannot see the failure that matters at deploy: it scores the
+  # conditional MEAN velocity field at uniform t, averaged over all
+  # action_horizon x action_dim entries. These add, on the val split:
+  #   val_loss_raw           -- same loss on the non-EMA weights (the number the
+  #                             pre-2026-08-08 runs logged as val_loss)
+  #   val_loss_shuffled_obs  -- obs paired to another sample's action, i.e. the
+  #                             "conditioning is uninformative" reference that
+  #                             gives val_loss a scale
+  #   val_draw_std_*         -- spread over val_draw_k independent draws from one
+  #                             observation, in metres of EE displacement
+  #   val_prefix_tail_*      -- how far a fresh draw departs from a chunk it was
+  #                             already RTC-committed to, in metres
+  # Costs roughly 2x the validation pass plus (val_draw_k + 2) extra sampling
+  # forwards on one batch. Set False for the cheap path.
+  val_diagnostics: True
+  val_draw_k: 8
+  val_draw_n_obs: 4
 
 logging:
   project: umi_flow

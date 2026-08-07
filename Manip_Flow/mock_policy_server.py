@@ -89,10 +89,12 @@ class MockDPPolicyServer:
                 )
             )
         if mtype == "predict":
-            req_id, _cams, _low, _s, _w = dp_wire.decode_predict_request(buf)
+            request = dp_wire.decode_predict_request(buf)
             t0 = time.perf_counter()
             act = self._identity_action()
-            return dp_wire.encode_action_reply(req_id, act, (time.perf_counter() - t0) * 1e3)
+            return dp_wire.encode_action_reply(
+                request.req_id, act, (time.perf_counter() - t0) * 1e3
+            )
         return dp_wire.encode_error(int(msg.get("req_id", -1)), f"unknown type {mtype!r}")
 
     def serve_forever(self) -> None:

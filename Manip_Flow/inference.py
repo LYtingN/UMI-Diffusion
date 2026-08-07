@@ -105,12 +105,23 @@ class FlowPolicyInference:
         action_step = int(self.shape_meta["action"]["down_sample_steps"])
         self.action_fps = dataset_frequency / action_step
         self.rtc_enabled = bool(rtc_enabled)
-        if self.rtc_enabled:
-            from Manip_Flow.rtc_relative_action import RTCInferenceState
+        self._rtc_state = None
+        self.reset_rtc()
 
-            self._rtc_state = RTCInferenceState(self.action_fps)
-        else:
+    def reset_rtc(self) -> None:
+        """Drop the carried RTC chunk -- call on every episode boundary.
+
+        The RTC prefix re-anchors the PREVIOUS chunk's leftover tokens into the
+        current EE frame, which is only meaningful within one continuous episode.
+        Across an episode reset the robot teleports back to the initial pose, so
+        the carried chunk describes motion that will never be executed.
+        """
+        if not self.rtc_enabled:
             self._rtc_state = None
+            return
+        from Manip_Flow.rtc_relative_action import RTCInferenceState
+
+        self._rtc_state = RTCInferenceState(self.action_fps)
 
     def frames_at_target_fps(self, dp_fps: float, target_fps: float = 30.0) -> int:
         """Planner frames one chunk yields after dp_adapter resampling."""
@@ -147,7 +158,15 @@ class FlowPolicyInference:
             raise DeploymentConfigError(
                 f"replan_stride must be >= 1, got {replan_stride}"
             )
-        n = self.frames_at_target_fps(dp_fps, target_fps) + history_len - 1
+        action_frames = self.frames_at_target_fps(dp_fps, target_fps)
+        available_after_lead = action_frames - replan_stride
+        if available_after_lead < int(seg_len):
+            raise DeploymentConfigError(
+                f"action chunk leaves {available_after_lead} frames after "
+                f"latency compensation prefix {replan_stride}, but planner "
+                f"seg_len={seg_len}; retrain with a longer action horizon."
+            )
+        n = action_frames + history_len - 1
         lookahead_len = max(int(kp_window_len) - int(seg_len), 0)
         required = max(
             int(seg_len), int(replan_stride) + history_len + lookahead_len

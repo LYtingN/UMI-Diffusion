@@ -27,6 +27,11 @@ from Manip_Flow.env_runner.base_image_runner import BaseImageRunner
 from Manip_Flow.common.checkpoint_util import TopKCheckpointManager
 from Manip_Flow.common.json_logger import JsonLogger, NullJsonLogger
 from Manip_Flow.common.pytorch_util import dict_apply, optimizer_to
+from Manip_Flow.common.val_diagnostics import (
+    log_draw_dispersion,
+    log_prefix_consistency,
+    shuffled_obs_batch,
+)
 from Manip_Flow.model.diffusion.ema_model import EMAModel
 from Manip_Flow.model.common.lr_scheduler import get_scheduler
 from accelerate import Accelerator
@@ -306,33 +311,69 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                 # only ever see 1/world_size of the val episodes. Running the forward
                 # on all ranks also keeps DDP participation symmetric.
                 if (self.epoch % cfg.training.val_every) == 0 and len(val_dataloader) > 0:
+                    # val_loss is measured on `policy`, i.e. the EMA copy when
+                    # use_ema=True -- those are exactly the weights that get
+                    # deployed (inference.py prefers state_dicts['ema_model']).
+                    # topk ranks checkpoints by val_loss, so measuring it on the
+                    # raw model selects a checkpoint by a number that never runs.
+                    # val_loss_raw keeps the pre-2026-08-08 series comparable.
+                    #
                     # `policy.eval()` above only touches ema_model when use_ema=True,
                     # so put the trained model itself in eval explicitly -- otherwise
                     # RandomCrop/ColorJitter stay active and val_loss is noise.
                     # self.model.train() at the top of the next epoch restores mode.
+                    # Both models therefore see UNAUGMENTED inputs while train_loss
+                    # is augmented, so the train/val gap logged here UNDERSTATES
+                    # overfitting.
+                    #
+                    # val_loss_shuffled_obs is the same flow loss with each obs
+                    # paired to another sample's action. The flow target x1-x0 has
+                    # an irreducible conditional-variance floor, so the absolute
+                    # val_loss carries no scale on its own; this is the
+                    # "conditioning is uninformative" reference. val_loss rising
+                    # toward it means the visual conditioning has stopped paying.
                     self.model.eval()
+                    run_val_diagnostics = bool(OmegaConf.select(
+                        cfg, 'training.val_diagnostics', default=True))
                     with torch.no_grad():
-                        val_loss_sum = torch.zeros((), device=device)
+                        # [deployed(ema), raw, shuffled-obs, shuffled batch count]
+                        val_sums = torch.zeros(4, device=device)
                         val_batches = torch.zeros((), device=device)
                         with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}",
                                 leave=False, mininterval=cfg.training.tqdm_interval_sec,
                                 disable=not accelerator.is_main_process) as tepoch:
                             for batch_idx, batch in enumerate(tepoch):
                                 batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                                loss = self.model(batch)
-                                val_loss_sum += loss.detach().float()
+                                val_sums[0] += policy(batch).detach().float()
+                                if run_val_diagnostics:
+                                    # With use_ema=False `policy` already IS the
+                                    # unwrapped self.model, so skip the duplicate pass.
+                                    if cfg.training.use_ema:
+                                        val_sums[1] += self.model(batch).detach().float()
+                                    else:
+                                        val_sums[1] += val_sums[0].detach()
+                                    if batch['action'].shape[0] > 1:
+                                        val_sums[2] += policy(
+                                            shuffled_obs_batch(batch)).detach().float()
+                                        val_sums[3] += 1
                                 val_batches += 1
                                 if (cfg.training.max_val_steps is not None) \
                                     and batch_idx >= (cfg.training.max_val_steps-1):
                                     break
                         # weight by per-rank batch count: shards can be uneven
                         stats = accelerator.gather(
-                            torch.stack([val_loss_sum, val_batches]).unsqueeze(0))
-                        total_loss = stats[:, 0].sum().item()
-                        total_batches = stats[:, 1].sum().item()
+                            torch.cat([val_sums, val_batches.reshape(1)]).unsqueeze(0))
+                        totals = stats.sum(dim=0)
+                        total_batches = totals[4].item()
                         if total_batches > 0:
                             # log epoch average validation loss
-                            step_log['val_loss'] = total_loss / total_batches
+                            step_log['val_loss'] = totals[0].item() / total_batches
+                            if run_val_diagnostics:
+                                step_log['val_loss_raw'] = totals[1].item() / total_batches
+                                shuffled_batches = totals[3].item()
+                                if shuffled_batches > 0:
+                                    step_log['val_loss_shuffled_obs'] = \
+                                        totals[2].item() / shuffled_batches
 
 
                 # NOTE: values MUST be python floats, not 0-dim tensors. JsonLogger's
@@ -350,6 +391,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     step_log[f'{category}_action_mse_error_pos'] = mse(pred_action[..., :3], gt_action[..., :3]).item()
                     step_log[f'{category}_action_mse_error_rot'] = mse(pred_action[..., 3:9], gt_action[..., 3:9]).item()
                     step_log[f'{category}_action_mse_error_width'] = mse(pred_action[..., 9], gt_action[..., 9]).item()
+
                 # run diffusion sampling on a training batch
                 if (self.epoch % cfg.training.sample_every) == 0 and accelerator.is_main_process:
                     with torch.no_grad():
@@ -365,6 +407,22 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                             gt_action = batch['action']
                             pred_action = policy.predict_action(batch['obs'], None)['action_pred']
                             log_action_mse(step_log, 'val', pred_action, gt_action)
+                            if bool(OmegaConf.select(
+                                    cfg, 'training.val_diagnostics', default=True)):
+                                n_obs = min(
+                                    int(OmegaConf.select(
+                                        cfg, 'training.val_draw_n_obs', default=4)),
+                                    gt_action.shape[0])
+                                log_draw_dispersion(
+                                    step_log, policy, batch['obs'], n_obs,
+                                    int(OmegaConf.select(
+                                        cfg, 'training.val_draw_k', default=8)))
+                                # deploy's stride=32 advances ~11 of the 40 action
+                                # tokens per commit, i.e. about half the RTC
+                                # execution horizon.
+                                log_prefix_consistency(
+                                    step_log, policy, batch['obs'], n_obs,
+                                    policy.rtc_execution_horizon // 2)
 
                         del batch
                         del gt_action

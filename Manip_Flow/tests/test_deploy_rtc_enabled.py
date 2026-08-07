@@ -4,10 +4,11 @@ import inspect
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import torch
 
 from Manip_Flow.common import real_inference_util
-from Manip_Flow.inference import FlowPolicyInference
+from Manip_Flow.inference import DeploymentConfigError, FlowPolicyInference
 from Manip_Flow.mock_policy_server import MockDPPolicyServer
 from Manip_Flow.policy_server import DPPolicyServer, build_parser
 from pipeline.Deploy.bridge import dp_wire
@@ -108,6 +109,82 @@ def test_policy_server_ping_reports_protocol_and_action_frequency() -> None:
     assert message["rtc_enabled"] is True
 
 
+def test_reset_rtc_replaces_the_carried_chunk_only_when_rtc_is_on() -> None:
+    # Given: a live RTC state holding the previous episode's chunk.
+    inference = FlowPolicyInference.__new__(FlowPolicyInference)
+    inference.rtc_enabled = True
+    inference.action_fps = 10.0
+    inference.reset_rtc()
+    carried = inference._rtc_state
+
+    # When
+    inference.reset_rtc()
+
+    # Then: a fresh state replaces it, and the off switch still means no state.
+    assert inference._rtc_state is not None
+    assert inference._rtc_state is not carried
+    inference.rtc_enabled = False
+    inference.reset_rtc()
+    assert inference._rtc_state is None
+
+
+def _predict_buf(start: int, episode_token: str) -> bytes:
+    return dp_wire.encode_predict_request(
+        req_id=1,
+        cameras={"camera0_rgb": [b"\xff\xd8jpeg"]},
+        lowdim={"robot0_gripper_width": np.zeros((2, 1), dtype=np.float32)},
+        start=start,
+        window_len=72,
+        episode_token=episode_token,
+    )
+
+
+def _episode_token_server() -> DPPolicyServer:
+    server = DPPolicyServer.__new__(DPPolicyServer)
+    server._episode_token = None
+    resets = []
+    server.infer = SimpleNamespace(
+        reset_rtc=lambda: resets.append(True),
+        predict_relative_action=lambda env_obs, start: np.zeros(
+            (4, 20), dtype=np.float32
+        ),
+    )
+    server._assemble_env_obs = lambda cameras, lowdim: {}
+    server.resets = resets
+    return server
+
+
+def test_policy_server_drops_rtc_state_when_the_episode_token_changes() -> None:
+    # Given: a server that outlives the bridge, so `start` alone cannot mark the
+    # boundary -- both episodes replan from planner frame 0 onwards.
+    server = _episode_token_server()
+
+    # When: two episodes of the same bridge session each stream a few requests.
+    for buf in (
+        _predict_buf(0, "sess:0:0"),
+        _predict_buf(32, "sess:0:0"),
+        _predict_buf(0, "sess:1:1"),
+        _predict_buf(32, "sess:1:1"),
+    ):
+        server._handle(buf)
+
+    # Then: RTC state is dropped exactly once per episode, not per request.
+    assert len(server.resets) == 2
+
+
+def test_policy_server_keeps_rtc_state_for_a_tokenless_client() -> None:
+    # Given: a pre-protocol-4 bridge that cannot report episode identity.
+    server = _episode_token_server()
+
+    # When
+    server._handle(_predict_buf(0, ""))
+    server._handle(_predict_buf(32, ""))
+
+    # Then: the server never guesses a boundary; RTC's own start-regression guard
+    # stays the only fallback.
+    assert server.resets == []
+
+
 def test_mock_policy_server_reports_deploy_action_frequency() -> None:
     # Given
     server = MockDPPolicyServer(action_fps=15.0)
@@ -119,3 +196,20 @@ def test_mock_policy_server_reports_deploy_action_frequency() -> None:
     assert message["protocol_version"] == dp_wire.DP_PROTOCOL_VERSION
     assert message["action_fps"] == 15.0
     assert message["rtc_enabled"] is False
+
+
+def test_local_budget_rejects_action_short_after_replan_lead() -> None:
+    # Given: startup sees 65 action frames for a 72-frame segment and stride 16.
+    inference = FlowPolicyInference.__new__(FlowPolicyInference)
+    inference.action_horizon = 65
+    inference.action_fps = 30.0
+
+    # When / Then: local mode rejects the chunk before its first planning call.
+    with pytest.raises(DeploymentConfigError, match="leaves 49 frames"):
+        inference.assert_planner_budget(
+            dp_fps=30.0,
+            seg_len=72,
+            kp_window_len=72,
+            replan_stride=16,
+            history_len=8,
+        )

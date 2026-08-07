@@ -100,6 +100,10 @@ class DPPolicyServer:
         self.host = host
         self._n_robots = self._count_robots(self.infer.shape_meta)
         self._sock = None
+        # Episode identity of the last predict served. The server outlives bridge
+        # restarts and 'i' presses, so this is the ONLY signal that per-episode
+        # state (the RTC prefix) must be dropped.
+        self._episode_token: str | None = None
 
     @staticmethod
     def _count_robots(shape_meta: dict) -> int:
@@ -130,6 +134,23 @@ class DPPolicyServer:
             env_obs[k] = np.asarray(v)
         return env_obs
 
+    def _sync_episode(self, episode_token: str) -> None:
+        """Drop per-episode inference state when the bridge reports a new episode.
+
+        An empty token means a pre-protocol-4 client; leave the state alone (the
+        RTC state's own ``start`` regression guard is the only fallback then).
+        """
+        if not episode_token or episode_token == self._episode_token:
+            return
+        previous = self._episode_token
+        self._episode_token = episode_token
+        self.infer.reset_rtc()
+        print(
+            f"[policy_server] episode {previous!r} -> {episode_token!r}: "
+            "RTC state reset.",
+            flush=True,
+        )
+
     def _handle(self, buf: bytes) -> bytes:
         msg = dp_wire.decode_any(buf)
         mtype = msg.get("type")
@@ -146,18 +167,21 @@ class DPPolicyServer:
                 )
             )
         if mtype == "predict":
-            req_id, cameras, lowdim, start, _win = dp_wire.decode_predict_request(buf)
+            request = dp_wire.decode_predict_request(buf)
+            self._sync_episode(request.episode_token)
             t0 = time.perf_counter()
             try:
-                env_obs = self._assemble_env_obs(cameras, lowdim)
+                env_obs = self._assemble_env_obs(request.cameras, request.lowdim)
                 action = self.infer.predict_relative_action(
                     env_obs,
-                    start=start,
+                    start=request.start,
                 )
             except Exception as exc:  # keep the server alive; report to the client
-                return dp_wire.encode_error(req_id, f"{type(exc).__name__}: {exc}")
+                return dp_wire.encode_error(
+                    request.req_id, f"{type(exc).__name__}: {exc}"
+                )
             server_ms = (time.perf_counter() - t0) * 1e3
-            return dp_wire.encode_action_reply(req_id, action, server_ms)
+            return dp_wire.encode_action_reply(request.req_id, action, server_ms)
         return dp_wire.encode_error(int(msg.get("req_id", -1)), f"unknown type {mtype!r}")
 
     def serve_forever(self) -> None:
