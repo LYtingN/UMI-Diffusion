@@ -46,8 +46,12 @@ policy:
     position_encording: 'sinusoidal'
     downsample_ratio: 32
     transforms:
+      # 0.95 crops 224 -> 212, too weak to stop the policy memorizing absolute
+      # positions. Note torchvision RandomCrop draws ONE crop per call, i.e. per
+      # (batch, camera), not per sample -- so the strength per draw matters more
+      # than it would with per-sample augmentation.
       - type: RandomCrop
-        ratio: 0.95
+        ratio: 0.88
       - _target_: torchvision.transforms.ColorJitter
         brightness: 0.3
         contrast: 0.4
@@ -62,11 +66,36 @@ policy:
   time_sample: uniform
   logit_normal_mean: 0.0
   logit_normal_std: 1.0
-  train_flow_n_samples: 1
+  # 4 flow samples per obs-encoder forward. The two ViT-B towers are ~90% of the
+  # step cost (171M vs 18M), so this buys 4x the velocity-field supervision for
+  # ~1.15x the time, and lower velocity-estimate variance is directly lower
+  # sampling dispersion at deploy.
+  train_flow_n_samples: 4
   obs_as_global_cond: True
   rtc_execution_horizon: 20
   rtc_max_guidance_weight: 5.0
   rtc_prefix_schedule: exp
+
+  # ConditionalUnet1D builds a Linear(128 + global_cond -> 2*out_ch) in EVERY
+  # residual block, so the raw 1650-dim feature costs 9.56M of the 18.30M UNet on
+  # FiLM projection alone. Projecting once to 256 first drops that to 2.07M with
+  # the temporal convolutions untouched. FlowDiT1D already bottlenecks internally.
+  cond_bottleneck_dim: 256
+  # Classifier-free guidance. cond_dropout_prob trains the unconditional branch
+  # (and is itself a strong regularizer); cfg_scale > 1 at inference sharpens the
+  # sample toward the observation, which is the direct lever on the chunk-end
+  # multimodality. Kept at 1.0 here -- raise it on the deploy side once a
+  # checkpoint has actually been trained with dropout > 0.
+  cond_dropout_prob: 0.1
+  cfg_scale: 1.0
+  # Deploy commits ~11 of the 40 action tokens per replan and RTC carries
+  # rtc_execution_horizon=20, so tokens past 20 are neither executed nor
+  # predictable from a single frame -- yet with uniform weights they take half the
+  # loss and half of val_loss. Weight 1.0 through token 20, then linear to 0.25.
+  # Renormalized to mean 1.0, so val_loss keeps its magnitude but is NOT
+  # comparable to runs with different weights.
+  loss_horizon_full_steps: 20
+  loss_horizon_tail_weight: 0.25
 
   backbone: unet
   diffusion_step_embed_dim: 128
@@ -100,10 +129,18 @@ val_dataloader:
 
 optimizer:
   _target_: torch.optim.AdamW
-  lr: 3.0e-4
+  lr: 1.0e-4
   betas: [0.95, 0.999]
   eps: 1.0e-8
-  weight_decay: 1.0e-6
+  # 1e-6 is decay switched off in all but name. The pretrained ViT blocks are
+  # protected by their own 0.1x lr group (see the workspace), so the decay lands
+  # mostly where it should: the randomly-initialized pool head, cond_proj and the
+  # velocity model.
+  # NOTE the coupling with lr: AdamW's decoupled decay shrinks weights by
+  # lr * weight_decay per step, so dropping lr 3e-4 -> 1e-4 also weakens the
+  # regularization 3x (3e-6 -> 1e-6 per step). If lr was lowered to fight
+  # overfitting, this is pulling the other way.
+  weight_decay: 1.0e-2
 
 training:
   device: "cuda:0"

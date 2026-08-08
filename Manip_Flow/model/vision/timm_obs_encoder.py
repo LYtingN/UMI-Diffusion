@@ -74,6 +74,10 @@ class TimmObsEncoder(ModuleAttrMixin):
             # partial unfreeze: freeze the whole backbone, then re-enable grads on
             # only the last N transformer blocks (+ final norm). ViT only. 0 = off.
             finetune_last_n_blocks: int=0,
+            # Also return the raw patch tokens as a (B, N, C) sequence, for a
+            # backbone that cross-attends to them instead of only consuming the
+            # pooled vector. ViT only. See forward_features.
+            context_tokens: bool=False,
 
         ):
         """
@@ -288,6 +292,21 @@ class TimmObsEncoder(ModuleAttrMixin):
                 num_heads=feature_dim // 64,
                 output_dim=feature_dim
             )
+
+        self.context_tokens = bool(context_tokens)
+        self.context_dim = int(feature_dim) if self.context_tokens else 0
+        if self.context_tokens:
+            assert is_vit, 'context_tokens needs a ViT backbone (patch tokens)'
+            # A ViT adds its own patch-position embedding, so WHERE a token sits in
+            # its own frame is already encoded. WHICH frame and WHICH camera it came
+            # from is not -- and that is the entire point of feeding more than one
+            # timestep. Without this the cross-attention sees an unordered bag of
+            # patches and cannot tell "approaching" from "retreating".
+            horizons = [int(obs_shape_meta[key]['horizon']) for key in rgb_keys]
+            self.context_source_embed = nn.Parameter(
+                torch.zeros(len(rgb_keys), max(horizons), 1, feature_dim))
+            nn.init.normal_(self.context_source_embed, std=0.02)
+
         logger.info(
             "number of parameters: %e", sum(p.numel() for p in self.parameters())
         )
@@ -340,12 +359,20 @@ class TimmObsEncoder(ModuleAttrMixin):
             assert self.feature_aggregation is None
             return feature
         
-    def forward(self, obs_dict):
+    def forward_features(self, obs_dict):
+        """-> (flat_feature (B, D), context_tokens (B, N, C) or None).
+
+        The two share ONE backbone forward per (camera, frame): the pooled vector
+        for whatever consumes a flat conditioning vector, the patch tokens for a
+        backbone that cross-attends. Computing them separately would double the
+        ViT cost, which is ~90% of the step.
+        """
         features = list()
+        context = list() if self.context_tokens else None
         batch_size = next(iter(obs_dict.values())).shape[0]
-        
+
         # process rgb input
-        for key in self.rgb_keys:
+        for cam_index, key in enumerate(self.rgb_keys):
             img = obs_dict[key]
             B, T = img.shape[:2]
             assert B == batch_size
@@ -360,6 +387,25 @@ class TimmObsEncoder(ModuleAttrMixin):
             assert len(feature.shape) == 2 and feature.shape[0] == B * T
             features.append(feature.reshape(B, -1))
 
+            if self.context_tokens:
+                # (B*T, prefix + N, C) -> (B, T, N, C), stamped with its
+                # (camera, frame) identity, then flattened to one sequence.
+                # The assert is not paranoia: the embedding is sized from
+                # shape_meta's horizon, and if the caller feeds MORE frames than
+                # that, a 1-row slice would broadcast the SAME stamp onto every
+                # frame -- silently reinstating the unordered bag of patches this
+                # embedding exists to prevent, with no error anywhere.
+                n_stamp = self.context_source_embed.shape[1]
+                assert T <= n_stamp, (
+                    f'{key}: got {T} frames but context_source_embed was sized '
+                    f'for {n_stamp} from shape_meta; the (camera, frame) stamp '
+                    f'would be reused across frames')
+                patch = raw_feature[:, self.num_prefix_tokens:, :]
+                n_patch, channels = patch.shape[1], patch.shape[2]
+                patch = patch.reshape(B, T, n_patch, channels)
+                patch = patch + self.context_source_embed[cam_index, :T].to(patch.dtype)
+                context.append(patch.reshape(B, T * n_patch, channels))
+
         # process lowdim input
         for key in self.low_dim_keys:
             data = obs_dict[key]
@@ -367,29 +413,48 @@ class TimmObsEncoder(ModuleAttrMixin):
             assert B == batch_size
             assert data.shape[2:] == self.key_shape_map[key]
             features.append(data.reshape(B, -1))
-        
+
         # concatenate all features
         result = torch.cat(features, dim=-1)
 
-        return result
-    
+        return result, (torch.cat(context, dim=1) if self.context_tokens else None)
 
-    @torch.no_grad()
-    def output_shape(self):
+    def forward(self, obs_dict):
+        return self.forward_features(obs_dict)[0]
+
+    def _example_obs_dict(self):
         example_obs_dict = dict()
         obs_shape_meta = self.shape_meta['obs']
         for key, attr in obs_shape_meta.items():
             shape = tuple(attr['shape'])
             this_obs = torch.zeros(
-                (1, attr['horizon']) + shape, 
+                (1, attr['horizon']) + shape,
                 dtype=self.dtype,
                 device=self.device)
             example_obs_dict[key] = this_obs
-        example_output = self.forward(example_obs_dict)
+        return example_obs_dict
+
+    @torch.no_grad()
+    def output_shape(self):
+        example_output = self.forward(self._example_obs_dict())
         assert len(example_output.shape) == 2
         assert example_output.shape[0] == 1
-        
+
         return example_output.shape
+
+    @torch.no_grad()
+    def context_shape(self):
+        """(n_tokens, dim) of the cross-attention context, or None if disabled.
+
+        Measured by a real forward rather than arithmetic over patch grid x
+        horizon x cameras: getting that count wrong would silently mis-shape the
+        cross-attention rather than fail.
+        """
+        if not self.context_tokens:
+            return None
+        _, context = self.forward_features(self._example_obs_dict())
+        assert context.ndim == 3 and context.shape[0] == 1
+        return tuple(context.shape[1:])
 
 
 if __name__=='__main__':

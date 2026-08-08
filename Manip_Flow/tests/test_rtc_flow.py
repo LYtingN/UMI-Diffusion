@@ -168,8 +168,9 @@ def test_official_rtc_does_not_hard_latch_tail_channels() -> None:
             _time: torch.Tensor,
             local_cond: torch.Tensor | None,
             global_cond: torch.Tensor | None,
+            context: torch.Tensor | None = None,
         ) -> torch.Tensor:
-            del local_cond, global_cond
+            del local_cond, global_cond, context
             return torch.zeros_like(value)
 
     # When: a new sample is generated with official soft-prefix RTC guidance.

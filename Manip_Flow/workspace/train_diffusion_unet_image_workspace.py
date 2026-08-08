@@ -27,6 +27,7 @@ from Manip_Flow.env_runner.base_image_runner import BaseImageRunner
 from Manip_Flow.common.checkpoint_util import TopKCheckpointManager
 from Manip_Flow.common.json_logger import JsonLogger, NullJsonLogger
 from Manip_Flow.common.pytorch_util import dict_apply, optimizer_to
+from Manip_Flow.common.optim_groups import build_param_groups
 from Manip_Flow.common.val_diagnostics import (
     log_draw_dispersion,
     log_prefix_consistency,
@@ -71,24 +72,12 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         if cfg.policy.obs_encoder.pretrained:
             backbone_lr *= 0.1
             print('==> reduce pretrained obs_encorder backbone lr')
-        obs_encoder_backbone_params = list()
-        obs_encoder_head_params = list()
-        for name, param in self.model.obs_encoder.named_parameters():
-            if not param.requires_grad:
-                continue
-            if name.startswith('key_model_map.'):
-                obs_encoder_backbone_params.append(param)
-            else:
-                obs_encoder_head_params.append(param)
-        print(f'obs_encorder backbone params: {len(obs_encoder_backbone_params)} '
-              f'@ lr {backbone_lr:g}')
-        print(f'obs_encorder head params: {len(obs_encoder_head_params)} '
-              f'@ lr {cfg.optimizer.lr:g}')
-        param_groups = [
-            {'params': self.model.model.parameters()},
-            {'params': obs_encoder_backbone_params, 'lr': backbone_lr},
-            {'params': obs_encoder_head_params},
-        ]
+        param_groups = build_param_groups(self.model, backbone_lr)
+        labels = ['velocity model', 'obs_encorder backbone', 'obs_encorder head',
+                  'other policy']
+        for label, group in zip(labels, param_groups):
+            print(f'{label} params: {len(group["params"])} '
+                  f'@ lr {group.get("lr", cfg.optimizer.lr):g}')
         # self.optimizer = hydra.utils.instantiate(
         #     cfg.optimizer, params=param_groups)
         optimizer_cfg = OmegaConf.to_container(cfg.optimizer, resolve=True)

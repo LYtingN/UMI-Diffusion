@@ -1,0 +1,244 @@
+# DiT + patch-token cross-attention arm, forked from
+# train_flow_unet_humi_lerobot_umi_pnp.yaml. Everything not listed below is
+# identical to that config.
+#
+# What this arm changes and why:
+#
+#  1. task.img_obs_horizon 1 -> 2.  With one frame the vision path carries ZERO
+#     temporal information: two visually similar frames from different phases of
+#     the task are indistinguishable, and "approaching" vs "retreating" is
+#     unrecoverable. The only history today is low_dim_obs_horizon=3, and UMI's
+#     relative pose_repr makes that a VELOCITY signal, not an absolute phase --
+#     "the drawer is 5 cm out" exists only in the image. Costs 2x the ViT
+#     forwards (4 instead of 2), which is ~90% of the step.
+#
+#  2. obs_encoder.context_tokens + backbone: dit.  attention_pool_2d collapses
+#     196 patch tokens per frame into ONE 768-vector, so "hand is 5 cm from the
+#     handle" is averaged away and the pooled features of "not yet grasped" and
+#     "grasped and pulling" sit too close to separate -- each draw coin-flips
+#     between phases. Cross-attention lets the action tokens read individual
+#     patches. This needs a token sequence, which the UNet's single flat
+#     global_cond structurally cannot carry; hence dit, not unet.
+#
+# The pooled vector is STILL produced (feature_aggregation: attention_pool_2d)
+# and still drives adaLN and CFG. Cross-attention is additive, and its gate is
+# zero-initialized, so the context pathway starts as a no-op.
+
+defaults:
+  - task: umi_bimanual
+  - _self_
+
+name: train_flow_dit_ctx_humi_dinov3
+_target_: Manip_Flow.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "humi_dit_ctx_dinov3_dual_100demos"
+
+task:
+  dataset_frequency: 30.0
+  # 10 Hz policy cadence. Horizon 40 spans 3.9 s and covers the H8/F32/P2
+  # Motion Prior's 104-frame condition window after resampling to 30 Hz.
+  obs_down_sample_steps: 3
+  low_dim_obs_horizon: 3
+  # 2 frames one policy step apart = 0.1 s of visual history (low_dim's 3 frames
+  # span 0.2 s -- deliberately NOT matched, since each extra image frame costs a
+  # full ViT-B forward per camera). This is what makes "similar image, different
+  # time" solvable at all; the cross-attention is what makes it solvable well.
+  # Deploy needs no change: gripper_obs_provider derives img_span from this
+  # horizon and the ring buffer is 32 deep.
+  img_obs_horizon: 2
+  action_horizon: 40
+  dataset_path: ${oc.env:UMI_PNP_DATASET_PATH}
+  dataset:
+    _target_: Manip_Flow.dataset.lerobot_umi_dataset.LeRobotUmiDataset
+    shape_meta: ${task.shape_meta}
+    dataset_path: ${task.dataset_path}
+    cache_dir: null
+    pose_repr: ${task.pose_repr}
+    action_padding: False
+    temporally_independent_normalization: False
+    repeat_frame_prob: 0.0
+    seed: 42
+    val_ratio: 0.10
+
+policy:
+  _target_: Manip_Flow.policy.flow_timm_policy.FlowTimmPolicy
+  shape_meta: ${shape_meta}
+
+  obs_encoder:
+    _target_: Manip_Flow.model.vision.timm_obs_encoder.TimmObsEncoder
+    shape_meta: ${shape_meta}
+    model_name: 'vit_base_patch16_dinov3.lvd1689m'
+    pretrained: True
+    frozen: False
+    finetune_last_n_blocks: 1
+    global_pool: ''
+    # Kept: the pooled vector still drives adaLN and the CFG null branch. The
+    # patch tokens below are ADDITIONAL, from the same backbone forward.
+    feature_aggregation: 'attention_pool_2d'
+    # 224/16 = 14x14 = 196 patch tokens per (camera, frame), stamped with a
+    # learnable (camera, frame) embedding -- the ViT encodes where a token sits
+    # in its own frame but not WHICH frame or camera it came from, and that is
+    # exactly the distinction img_obs_horizon=2 is for.
+    #   2 cameras x 2 frames x 196 = 784 context tokens of dim 768.
+    context_tokens: True
+    position_encording: 'sinusoidal'
+    downsample_ratio: 32
+    transforms:
+      - type: RandomCrop
+        ratio: 0.88
+      - _target_: torchvision.transforms.ColorJitter
+        brightness: 0.3
+        contrast: 0.4
+        saturation: 0.5
+        hue: 0.08
+    use_group_norm: True
+    share_rgb_model: False
+    normalize_rgb: True
+
+  num_inference_steps: 8
+  time_embed_scale: 1.0
+  time_sample: uniform
+  logit_normal_mean: 0.0
+  logit_normal_std: 1.0
+  # First knob to cut if the step OOMs. With a pooled global_cond the repeat is
+  # a (B*n, 256) tensor; with 784 context tokens it also multiplies the
+  # cross-attention n-fold. 2 costs about half the DiT activations.
+  train_flow_n_samples: 4
+  obs_as_global_cond: True
+  rtc_execution_horizon: 20
+  rtc_max_guidance_weight: 5.0
+  rtc_prefix_schedule: exp
+
+  cond_bottleneck_dim: 256
+  cond_dropout_prob: 0.1
+  # Kept at 1.0 -- bit-identical to no CFG, so it changes nothing until a
+  # checkpoint has actually trained with dropout > 0. Raise on the deploy side.
+  # NOTE with context tokens the unconditional branch drops BOTH the pooled
+  # vector and the patch tokens; a null global_cond alongside the real image
+  # would leave the observation fully visible and make guidance meaningless.
+  cfg_scale: 1.0
+  loss_horizon_full_steps: 20
+  loss_horizon_tail_weight: 0.25
+
+  backbone: dit
+  diffusion_step_embed_dim: 128
+  # Sized against the unet arm's 10.80M velocity model, on 100 demos for 12
+  # epochs. d_model 512 / depth 6 measures 41.14M -- ~4x the baseline, which
+  # turns the A/B into "more capacity" as much as "cross-attention". 384/6
+  # measures 23.29M and keeps all 6 blocks, i.e. six separate looks at the
+  # image, which is the part that matters here. Cutting depth instead (512/4 =
+  # 28.01M) is worse: fewer, wider looks.
+  #   measured: 512/6 41.14M | 512/4 28.01M | 384/6 23.29M | 384/4 15.90M
+  # Raising this back is one line; note n_heads must keep d_model/n_heads = 64.
+  dit_d_model: 384
+  dit_depth: 6
+  dit_n_heads: 6
+  dit_mlp_ratio: 4.0
+  # 100 demos x 100 epochs with no regularization inside the velocity model is
+  # the overfit case; the image transforms above only regularize the encoder.
+  # This lands in THREE places (flow_dit_1d.py:54, 60, 67): self-attention
+  # weights, cross-attention weights, and the MLP's hidden layer. The
+  # cross-attention one is deliberate -- it stops any single patch token from
+  # becoming a shortcut, which matters most here because the 784 tokens are what
+  # this arm added. SDPA is preserved (need_weights=False passes dropout_p
+  # through), so the (64,6,40,784) attention matrix is still never materialized.
+  # Validation is unaffected: workspace:288/324 put both the EMA copy and the
+  # trained model in eval before any val or sampling diagnostic, so
+  # val_draw_std_pos_last_m measures sampling spread, not dropout noise.
+  dit_dropout: 0.1
+  # Paired with time_embed_scale: 1.0 above, same convention as the unet arm's
+  # unet_time_log_scale. FlowDiT1D's own default (10000) assumes
+  # time_embed_scale=1000 and would leave most frequency channels at ~0 here.
+  dit_time_log_scale: 10.0
+
+ema:
+  _target_: Manip_Flow.model.diffusion.ema_model.EMAModel
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+dataloader:
+  batch_size: 32
+  num_workers: 8
+  shuffle: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 32
+  num_workers: 8
+  shuffle: False
+  pin_memory: True
+  persistent_workers: True
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  # AdamW's decoupled decay shrinks by lr * weight_decay per step, so this is
+  # tied to the lr above; see the unet config.
+  weight_decay: 1.0e-2
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: False
+  lr_scheduler: cosine
+  lr_warmup_steps: 2000
+  num_epochs: 100
+  gradient_accumulate_every: 1
+  use_ema: True
+  freeze_encoder: False
+  rollout_every: 10
+  checkpoint_every: 10
+  val_every: 5
+  sample_every: 5
+  max_train_steps: null
+  max_val_steps: null
+  tqdm_interval_sec: 1.0
+  # val_loss_shuffled_obs is the measurement that says whether any of this
+  # worked: it is the "conditioning is uninformative" reference line. If
+  # val_loss sits close to it, the policy is ignoring the image and the token
+  # pathway did not take. See the unet config for the full list.
+  val_diagnostics: True
+  val_draw_k: 8
+  val_draw_n_obs: 4
+
+logging:
+  project: umi_flow
+  resume: False
+  mode: disabled
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    # NOT comparable to the unet arm's val_loss: same loss_horizon weights, but a
+    # different model, and val_loss is only ever a within-config ranking signal.
+    monitor_key: val_loss
+    mode: min
+    k: 20
+    format_str: 'epoch={epoch:04d}-val_loss={val_loss:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}

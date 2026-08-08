@@ -1,0 +1,67 @@
+config_version: 1
+cluster: aliyun_h100
+num_gpus: 8
+image: "ai-base:ubuntu22.04-sim5.0.0-lab_MD2.2.1-ray2.52.0-cu12.8_devel-v1.4"
+
+git_workspace:
+  token: GH_PAT
+  repos:
+    - repo_url: https://github.com/LYtingN/UMI-Diffusion.git
+      commit_sha: main
+
+pip_packages:
+  # numpy 必须钉在镜像 base env 自带的 1.26.0。不钉的话 imagecodecs 会解析到
+  # 2026.3.6(requires numpy>=2),把 numpy 2.x 装进 runtime_env 的 overlay venv
+  # 并遮蔽 base 的 1.26.0 —— 结果 torch/ray/hydra 从 base 加载(numpy/core),
+  # accelerate/imagecodecs 从 overlay 加载(numpy/_core),同一进程两套 numpy ABI。
+  - numpy==1.26.0
+  - dill
+  # zarr 必须 <3:replay_buffer.py / umi_dataset.py 用的是 zarr v2 的
+  # DirectoryStore / ZipStore / LMDBStore,zarr 3 已把它们移除
+  - zarr==2.18.7
+  - numcodecs==0.15.1
+  - lmdb==2.3.0
+  - timm
+  - diffusers
+  - accelerate
+  - wandb>=0.18.0
+  - imagecodecs==2026.1.14
+  - pandas
+  - imageio[ffmpeg]
+pip_directories: []
+py_modules: []
+py_paths: ["."]
+log_folder: "logs"
+
+tasks:
+  - name: flow_umi_pnp
+    type: torch_trainer.train
+    run_name: flow_humi_ditctx_dino_drawer_ep100
+    entry_module: Manip_Flow/scripts/train_flow_umi.py
+    args:
+      - "--config-name"
+      - "train_flow_dit_ctx_humi_lerobot_umi_pnp"
+
+      - "policy.obs_encoder.share_rgb_model=False"
+      - "task.dataset._target_=Manip_Flow.dataset.umi_dataset.UmiDataset"
+      - "task.dataset_path=/data/nas_ray/home/eason.er/datasets/drawer_pooled_0807.zarr.zip"
+      # cache_dir 必须落节点本地盘(不能是 /data/nas_ray:LMDB 走 NFS mmap 不可靠)。
+      - "task.dataset.cache_dir=/tmp/umi_zarr_cache"
+      - "logging.mode=offline"
+      - "hydra.run.dir=/data/nas_ray/home/eason.er/ckpt/flow_humi_ditctx_dino_drawer_0807_ep100"
+      - "dataloader.batch_size=16"
+      - "val_dataloader.batch_size=16"
+      - "training.num_epochs=100"
+      - "training.lr_warmup_steps=500"
+      - "training.checkpoint_every=5"
+      - "training.val_every=2"
+      - "training.sample_every=2"
+      - "checkpoint.topk.k=10"
+
+os_env_vars:
+  GH_PAT: "REPLACE_WITH_GITHUB_PAT"
+  WANDB_MODE: "offline"
+  UMI_PNP_DATASET_PATH: "/data/nas_ray/home/eason.er/datasets/drawer"
+  HF_HOME: "/data/nas_ray/home/eason.er/hf_cache"
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"

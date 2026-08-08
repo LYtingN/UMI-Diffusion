@@ -126,7 +126,35 @@ def flow_euler_sample(
     rtc_action_prefix: torch.Tensor | None,
     rtc_inference_delay: int,
     config: FlowSamplingConfig,
+    context: torch.Tensor | None = None,
+    uncond_global_cond: torch.Tensor | None = None,
+    uncond_context: torch.Tensor | None = None,
+    guidance_scale: float = 1.0,
 ) -> torch.Tensor:
+    """Euler-integrate the velocity field from noise (t=0) to data (t=1).
+
+    ``context`` is the observation token sequence for a cross-attending backbone;
+    it is passed through unchanged on every step.
+
+    ``guidance_scale`` > 1 needs ``uncond_global_cond``: the velocity becomes
+    ``v_uncond + s (v_cond - v_uncond)``, which costs one extra backbone forward
+    per step. It composes with RTC because ``rtc_guided_velocity`` differentiates
+    through whatever ``velocity_fn`` returns.
+    """
+    if guidance_scale != 1.0 and uncond_global_cond is None:
+        raise RTCConfigError(
+            f"guidance_scale={guidance_scale} needs uncond_global_cond; train "
+            "with cond_dropout_prob > 0 to learn the unconditional branch"
+        )
+    if guidance_scale != 1.0 and context is not None and uncond_context is None:
+        # Otherwise the "unconditional" forward still cross-attends to the real
+        # patch tokens, so the guidance direction is not a conditioning direction
+        # at all -- it would silently sharpen toward nothing meaningful.
+        raise RTCConfigError(
+            f"guidance_scale={guidance_scale} with context tokens needs "
+            "uncond_context; the unconditional branch must be blind to the "
+            "observation through both pathways"
+        )
     initial = torch.randn(
         size=condition_data.shape,
         dtype=condition_data.dtype,
@@ -170,12 +198,23 @@ def flow_euler_sample(
         )
 
         def velocity_fn(value: torch.Tensor) -> torch.Tensor:
-            return model(
+            velocity = model(
                 value,
                 time_batch,
                 local_cond=None,
                 global_cond=global_cond,
+                context=context,
             )
+            if guidance_scale == 1.0 or uncond_global_cond is None:
+                return velocity
+            unconditional = model(
+                value,
+                time_batch,
+                local_cond=None,
+                global_cond=uncond_global_cond,
+                context=uncond_context,
+            )
+            return unconditional + guidance_scale * (velocity - unconditional)
 
         velocity = (
             velocity_fn(state)
